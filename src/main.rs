@@ -4,7 +4,7 @@ mod ui;
 
 use std::io;
 
-use crossterm::event::{self, Event, KeyCode, KeyEventKind};
+use crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers};
 
 use app::App;
 
@@ -35,6 +35,9 @@ fn main() -> io::Result<()> {
                     _ => {}
                 }
             } else {
+                // Calculate visible lines for log scrolling
+                let visible_lines = ui::get_logs_visible_lines(&terminal.get_frame());
+
                 // Normal mode input
                 match key.code {
                     KeyCode::Char('q') => {
@@ -64,6 +67,18 @@ fn main() -> io::Result<()> {
                     }
                     KeyCode::Char('r') => {
                         app.load_services();
+                    }
+                    KeyCode::PageUp => {
+                        app.scroll_logs_up(visible_lines);
+                    }
+                    KeyCode::PageDown => {
+                        app.scroll_logs_down(visible_lines, visible_lines);
+                    }
+                    KeyCode::Char('u') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                        app.scroll_logs_up(visible_lines / 2);
+                    }
+                    KeyCode::Char('d') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                        app.scroll_logs_down(visible_lines / 2, visible_lines);
                     }
                     _ => {}
                 }

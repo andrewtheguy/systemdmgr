@@ -1,6 +1,6 @@
 use ratatui::widgets::ListState;
 
-use crate::service::{fetch_services, SystemdService};
+use crate::service::{fetch_logs, fetch_services, SystemdService};
 
 pub struct App {
     pub services: Vec<SystemdService>,
@@ -10,6 +10,9 @@ pub struct App {
     pub search_query: String,
     pub search_mode: bool,
     pub filtered_indices: Vec<usize>,
+    pub logs: Vec<String>,
+    pub logs_scroll: usize,
+    pub last_selected_service: Option<String>,
 }
 
 impl App {
@@ -22,6 +25,9 @@ impl App {
             search_query: String::new(),
             search_mode: false,
             filtered_indices: Vec::new(),
+            logs: Vec::new(),
+            logs_scroll: 0,
+            last_selected_service: None,
         };
         app.load_services();
         app
@@ -121,6 +127,50 @@ impl App {
     pub fn go_to_bottom(&mut self) {
         if !self.filtered_indices.is_empty() {
             self.list_state.select(Some(self.filtered_indices.len() - 1));
+        }
+    }
+
+    pub fn selected_service(&self) -> Option<&SystemdService> {
+        self.list_state
+            .selected()
+            .and_then(|i| self.filtered_indices.get(i))
+            .map(|&i| &self.services[i])
+    }
+
+    pub fn load_logs_for_selected(&mut self) {
+        let current_service = self.selected_service().map(|s| s.unit.clone());
+
+        if current_service != self.last_selected_service {
+            self.last_selected_service = current_service.clone();
+            self.logs_scroll = 0;
+
+            if let Some(unit) = current_service {
+                match fetch_logs(&unit, 1000) {
+                    Ok(logs) => {
+                        self.logs = logs;
+                        // Auto-scroll to bottom (most recent logs)
+                        if !self.logs.is_empty() {
+                            self.logs_scroll = self.logs.len().saturating_sub(1);
+                        }
+                    }
+                    Err(e) => {
+                        self.logs = vec![format!("Error fetching logs: {}", e)];
+                    }
+                }
+            } else {
+                self.logs.clear();
+            }
+        }
+    }
+
+    pub fn scroll_logs_up(&mut self, amount: usize) {
+        self.logs_scroll = self.logs_scroll.saturating_sub(amount);
+    }
+
+    pub fn scroll_logs_down(&mut self, amount: usize, visible_lines: usize) {
+        if !self.logs.is_empty() {
+            let max_scroll = self.logs.len().saturating_sub(visible_lines);
+            self.logs_scroll = (self.logs_scroll + amount).min(max_scroll);
         }
     }
 }

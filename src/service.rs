@@ -29,6 +29,18 @@ impl SystemdService {
     }
 }
 
+pub fn fetch_logs(unit_name: &str, lines: usize) -> Result<Vec<String>, String> {
+    let output = Command::new("journalctl")
+        .args(["-u", unit_name, "-n", &lines.to_string(), "--no-pager"])
+        .output()
+        .map_err(|e| format!("Failed to execute journalctl: {}", e))?;
+
+    Ok(String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .map(|s| s.to_string())
+        .collect())
+}
+
 pub fn fetch_services() -> Result<Vec<SystemdService>, String> {
     let output = Command::new("systemctl")
         .args(["list-units", "--type=service", "--all", "--no-pager", "--output=json"])
