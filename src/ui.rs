@@ -1,8 +1,8 @@
 use ratatui::{
-    layout::{Constraint, Layout},
+    layout::{Constraint, Layout, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, List, ListItem, Paragraph, Wrap},
+    widgets::{Block, Borders, Clear, List, ListItem, Paragraph, Wrap},
     Frame,
 };
 
@@ -149,16 +149,85 @@ pub fn render(frame: &mut Frame, app: &mut App) {
 
     // Footer with keybindings
     let footer_text = if app.search_mode {
-        "Type to search | Esc/Enter: Exit search"
+        "Type to search | Esc/Enter: Exit search | ?: Help"
     } else if !app.search_query.is_empty() || app.status_filter.is_some() {
-        "q: Quit | /: Search | s: Status | l: Logs | Esc: Clear | j/k: Nav | r: Refresh"
+        "q: Quit | /: Search | s: Status | l: Logs | Esc: Clear | ?: Help"
     } else {
-        "q/Esc: Quit | /: Search | s: Status | l: Logs | j/k: Nav | g/G: Top/Bottom | r: Refresh"
+        "q/Esc: Quit | /: Search | s: Status | l: Logs | ?: Help"
     };
     let footer = Paragraph::new(footer_text)
         .style(Style::default().fg(Color::DarkGray))
         .block(Block::default().borders(Borders::ALL));
     frame.render_widget(footer, chunks[2]);
+
+    // Help overlay
+    if app.show_help {
+        render_help(frame);
+    }
+}
+
+fn render_help(frame: &mut Frame) {
+    let help_text = vec![
+        Line::from(vec![
+            Span::styled("Navigation", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
+        ]),
+        Line::from("  j / Down      Move down"),
+        Line::from("  k / Up        Move up"),
+        Line::from("  g / Home      Go to top"),
+        Line::from("  G / End       Go to bottom"),
+        Line::from(""),
+        Line::from(vec![
+            Span::styled("Search & Filter", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
+        ]),
+        Line::from("  /             Start search"),
+        Line::from("  s             Cycle status filter"),
+        Line::from("  S             Clear status filter"),
+        Line::from("  Esc           Clear search/filter"),
+        Line::from(""),
+        Line::from(vec![
+            Span::styled("Logs Panel", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
+        ]),
+        Line::from("  l             Toggle logs panel"),
+        Line::from("  PgUp/PgDn     Scroll logs"),
+        Line::from("  Ctrl+u/d      Scroll logs half page"),
+        Line::from(""),
+        Line::from(vec![
+            Span::styled("Other", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
+        ]),
+        Line::from("  r             Refresh services"),
+        Line::from("  ?             Toggle this help"),
+        Line::from("  q / Esc       Quit"),
+    ];
+
+    let area = centered_rect(50, 70, frame.area());
+
+    let help = Paragraph::new(help_text)
+        .style(Style::default().fg(Color::White))
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .title("Help")
+                .style(Style::default().bg(Color::Black)),
+        );
+
+    frame.render_widget(Clear, area);
+    frame.render_widget(help, area);
+}
+
+fn centered_rect(percent_x: u16, percent_y: u16, area: Rect) -> Rect {
+    let popup_layout = Layout::vertical([
+        Constraint::Percentage((100 - percent_y) / 2),
+        Constraint::Percentage(percent_y),
+        Constraint::Percentage((100 - percent_y) / 2),
+    ])
+    .split(area);
+
+    Layout::horizontal([
+        Constraint::Percentage((100 - percent_x) / 2),
+        Constraint::Percentage(percent_x),
+        Constraint::Percentage((100 - percent_x) / 2),
+    ])
+    .split(popup_layout[1])[1]
 }
 
 /// Returns the number of visible lines in the logs panel

@@ -18,6 +18,18 @@ fn main() -> io::Result<()> {
         if let Event::Key(key) = event::read()?
             && key.kind == KeyEventKind::Press
         {
+            // Help can be toggled from anywhere
+            if key.code == KeyCode::Char('?') {
+                app.toggle_help();
+                continue;
+            }
+
+            // Close help with Esc or any key if help is shown
+            if app.show_help {
+                app.show_help = false;
+                continue;
+            }
+
             // Calculate visible lines for log scrolling
             let visible_lines = ui::get_logs_visible_lines(&terminal.get_frame(), app.show_logs);
 

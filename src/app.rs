@@ -15,6 +15,7 @@ pub struct App {
     pub last_selected_service: Option<String>,
     pub status_filter: Option<String>,
     pub show_logs: bool,
+    pub show_help: bool,
 }
 
 impl App {
@@ -32,6 +33,7 @@ impl App {
             last_selected_service: None,
             status_filter: None,
             show_logs: false,
+            show_help: false,
         };
         app.load_services();
         app
@@ -202,5 +204,9 @@ impl App {
 
     pub fn toggle_logs(&mut self) {
         self.show_logs = !self.show_logs;
+    }
+
+    pub fn toggle_help(&mut self) {
+        self.show_help = !self.show_help;
     }
 }
