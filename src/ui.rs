@@ -32,13 +32,16 @@ pub fn render(frame: &mut Frame, app: &mut App) {
         Paragraph::new(search_text)
             .style(Style::default().fg(Color::Yellow))
             .block(Block::default().borders(Borders::ALL).title("Search"))
-    } else if !app.search_query.is_empty() {
-        let search_info = format!(
-            "Search: {} ({} matches)",
-            app.search_query,
-            app.filtered_indices.len()
-        );
-        Paragraph::new(search_info)
+    } else if !app.search_query.is_empty() || app.status_filter.is_some() {
+        let mut info_parts = Vec::new();
+        if !app.search_query.is_empty() {
+            info_parts.push(format!("Search: {}", app.search_query));
+        }
+        if let Some(ref status) = app.status_filter {
+            info_parts.push(format!("Status: {}", status));
+        }
+        let info = format!("{} ({} matches)", info_parts.join(" | "), app.filtered_indices.len());
+        Paragraph::new(info)
             .style(Style::default().fg(Color::Green))
             .block(Block::default().borders(Borders::ALL))
     } else {
@@ -63,17 +66,16 @@ pub fn render(frame: &mut Frame, app: &mut App) {
                 let status_color = service.status_color();
                 let line = Line::from(vec![
                     Span::styled(
-                        format!("{:12}", service.status_display()),
+                        format!("{:8}", service.status_display()),
                         Style::default().fg(status_color),
                     ),
-                    Span::raw(" "),
                     Span::styled(&service.unit, Style::default().fg(Color::White)),
                 ]);
                 ListItem::new(line)
             })
             .collect();
 
-        let title = if app.search_query.is_empty() {
+        let title = if app.search_query.is_empty() && app.status_filter.is_none() {
             format!("Services ({})", app.services.len())
         } else {
             format!(
@@ -139,10 +141,10 @@ pub fn render(frame: &mut Frame, app: &mut App) {
     // Footer with keybindings
     let footer_text = if app.search_mode {
         "Type to search | Esc/Enter: Exit search"
-    } else if !app.search_query.is_empty() {
-        "q: Quit | /: Search | Esc: Clear | j/k: Nav | PgUp/PgDn: Scroll logs | r: Refresh"
+    } else if !app.search_query.is_empty() || app.status_filter.is_some() {
+        "q: Quit | /: Search | s: Status | Esc: Clear | j/k: Nav | PgUp/PgDn: Scroll logs | r: Refresh"
     } else {
-        "q/Esc: Quit | /: Search | j/k: Nav | g/G: Top/Bottom | PgUp/PgDn: Scroll logs | r: Refresh"
+        "q/Esc: Quit | /: Search | s: Status | j/k: Nav | g/G: Top/Bottom | PgUp/PgDn: Scroll logs | r: Refresh"
     };
     let footer = Paragraph::new(footer_text)
         .style(Style::default().fg(Color::DarkGray))

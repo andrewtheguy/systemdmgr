@@ -68,6 +68,12 @@ fn main() -> io::Result<()> {
                     KeyCode::Char('r') => {
                         app.load_services();
                     }
+                    KeyCode::Char('s') => {
+                        app.cycle_status_filter();
+                    }
+                    KeyCode::Char('S') => {
+                        app.clear_status_filter();
+                    }
                     KeyCode::PageUp => {
                         app.scroll_logs_up(visible_lines);
                     }

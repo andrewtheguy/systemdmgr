@@ -13,6 +13,7 @@ pub struct App {
     pub logs: Vec<String>,
     pub logs_scroll: usize,
     pub last_selected_service: Option<String>,
+    pub status_filter: Option<String>,
 }
 
 impl App {
@@ -28,6 +29,7 @@ impl App {
             logs: Vec::new(),
             logs_scroll: 0,
             last_selected_service: None,
+            status_filter: None,
         };
         app.load_services();
         app
@@ -50,21 +52,26 @@ impl App {
     }
 
     pub fn update_filter(&mut self) {
-        if self.search_query.is_empty() {
-            self.filtered_indices = (0..self.services.len()).collect();
-        } else {
-            let query = self.search_query.to_lowercase();
-            self.filtered_indices = self
-                .services
-                .iter()
-                .enumerate()
-                .filter(|(_, service)| {
-                    service.unit.to_lowercase().contains(&query)
-                        || service.description.to_lowercase().contains(&query)
-                })
-                .map(|(i, _)| i)
-                .collect();
-        }
+        let query = self.search_query.to_lowercase();
+        self.filtered_indices = self
+            .services
+            .iter()
+            .enumerate()
+            .filter(|(_, service)| {
+                // Text search filter
+                let matches_search = self.search_query.is_empty()
+                    || service.unit.to_lowercase().contains(&query)
+                    || service.description.to_lowercase().contains(&query);
+
+                // Status filter
+                let matches_status = self.status_filter.is_none()
+                    || self.status_filter.as_ref() == Some(&service.sub);
+
+                matches_search && matches_status
+            })
+            .map(|(i, _)| i)
+            .collect();
+
         // Reset selection if current selection is out of bounds
         if let Some(selected) = self.list_state.selected() {
             if selected >= self.filtered_indices.len() {
@@ -81,6 +88,23 @@ impl App {
 
     pub fn clear_search(&mut self) {
         self.search_query.clear();
+        self.update_filter();
+    }
+
+    pub fn cycle_status_filter(&mut self) {
+        self.status_filter = match self.status_filter.as_deref() {
+            None => Some("running".to_string()),
+            Some("running") => Some("exited".to_string()),
+            Some("exited") => Some("failed".to_string()),
+            Some("failed") => Some("dead".to_string()),
+            Some("dead") => None,
+            _ => None,
+        };
+        self.update_filter();
+    }
+
+    pub fn clear_status_filter(&mut self) {
+        self.status_filter = None;
         self.update_filter();
     }
 
