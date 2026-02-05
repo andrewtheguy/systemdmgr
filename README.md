@@ -23,6 +23,12 @@ A terminal UI for viewing and browsing systemd services.
 curl -fsSL https://raw.githubusercontent.com/andrewtheguy/systemdview/main/install.sh | bash
 ```
 
+To install a prerelease version:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/andrewtheguy/systemdview/main/install.sh | bash -s -- --prerelease
+```
+
 ### From Source
 
 ```bash
