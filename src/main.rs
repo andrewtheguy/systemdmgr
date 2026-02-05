@@ -30,8 +30,8 @@ fn main() -> io::Result<()> {
 
         match event::read()? {
             Event::Key(key) if key.kind == KeyEventKind::Press => {
-            // Help can be toggled from anywhere
-            if key.code == KeyCode::Char('?') {
+            // Help can be toggled from anywhere (except status picker)
+            if key.code == KeyCode::Char('?') && !app.show_status_picker {
                 app.toggle_help();
                 continue;
             }
@@ -39,6 +39,18 @@ fn main() -> io::Result<()> {
             // Close help with Esc or any key if help is shown
             if app.show_help {
                 app.show_help = false;
+                continue;
+            }
+
+            // Status picker modal
+            if app.show_status_picker {
+                match key.code {
+                    KeyCode::Esc | KeyCode::Char('s') => app.close_status_picker(),
+                    KeyCode::Down | KeyCode::Char('j') => app.status_picker_next(),
+                    KeyCode::Up | KeyCode::Char('k') => app.status_picker_previous(),
+                    KeyCode::Enter => app.status_picker_confirm(),
+                    _ => {}
+                }
                 continue;
             }
 
@@ -181,10 +193,7 @@ fn main() -> io::Result<()> {
                         app.load_services();
                     }
                     KeyCode::Char('s') => {
-                        app.cycle_status_filter();
-                    }
-                    KeyCode::Char('S') => {
-                        app.clear_status_filter();
+                        app.open_status_picker();
                     }
                     KeyCode::PageUp => {
                         app.page_up(visible_services);
@@ -221,8 +230,8 @@ fn main() -> io::Result<()> {
 }
 
 fn handle_mouse_event(app: &mut App, mouse: MouseEvent, frame_size: Rect) {
-    // Don't handle mouse events when help is shown
-    if app.show_help {
+    // Don't handle mouse events when help or status picker is shown
+    if app.show_help || app.show_status_picker {
         return;
     }
 
