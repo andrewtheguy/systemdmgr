@@ -6,7 +6,7 @@ use ratatui::{
     Frame,
 };
 
-use crate::app::App;
+use crate::app::{App, STATUS_OPTIONS};
 
 /// Layout regions for mouse hit testing
 pub struct LayoutRegions {
@@ -244,6 +244,11 @@ pub fn render(frame: &mut Frame, app: &mut App) {
         .block(Block::default().borders(Borders::ALL));
     frame.render_widget(footer, chunks[2]);
 
+    // Status picker overlay
+    if app.show_status_picker {
+        render_status_picker(frame, app);
+    }
+
     // Help overlay
     if app.show_help {
         render_help(frame, app);
@@ -313,8 +318,7 @@ fn render_help(frame: &mut Frame, app: &App) {
         Line::from(""),
         Line::from(vec![Span::styled("Search & Filter", section_style)]),
         Line::from("  /             Start search"),
-        Line::from("  s             Cycle status filter"),
-        Line::from("  S             Clear status filter"),
+        Line::from("  s             Open status filter"),
         Line::from("  Esc           Clear search/filter"),
         Line::from(""),
         Line::from(vec![Span::styled("Logs Panel", section_style)]),
@@ -362,6 +366,58 @@ fn render_help(frame: &mut Frame, app: &App) {
 
     frame.render_widget(Clear, area);
     frame.render_widget(help, area);
+}
+
+fn render_status_picker(frame: &mut Frame, app: &mut App) {
+    let items: Vec<ListItem> = STATUS_OPTIONS
+        .iter()
+        .map(|&opt| {
+            let color = match opt {
+                "All" => Color::Cyan,
+                "running" => Color::Green,
+                "exited" => Color::Yellow,
+                "failed" => Color::Red,
+                "dead" => Color::DarkGray,
+                _ => Color::White,
+            };
+            let is_active = match (&app.status_filter, opt) {
+                (None, "All") => true,
+                (Some(f), o) => f == o,
+                _ => false,
+            };
+            let marker = if is_active { " *" } else { "" };
+            let text = format!("  {}{}", opt, marker);
+            ListItem::new(text).style(Style::default().fg(color))
+        })
+        .collect();
+
+    let list = List::new(items)
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .title("Status Filter")
+                .style(Style::default().bg(Color::Black)),
+        )
+        .highlight_style(
+            Style::default()
+                .bg(Color::DarkGray)
+                .add_modifier(Modifier::BOLD),
+        );
+
+    let area = centered_fixed_rect(30, STATUS_OPTIONS.len() as u16 + 2, frame.area());
+    frame.render_widget(Clear, area);
+    frame.render_stateful_widget(list, area, &mut app.status_picker_state);
+}
+
+fn centered_fixed_rect(width: u16, height: u16, area: Rect) -> Rect {
+    let x = area.x + area.width.saturating_sub(width) / 2;
+    let y = area.y + area.height.saturating_sub(height) / 2;
+    Rect::new(
+        x,
+        y,
+        width.min(area.width),
+        height.min(area.height),
+    )
 }
 
 fn centered_rect(percent_x: u16, percent_y: u16, area: Rect) -> Rect {

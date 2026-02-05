@@ -2,6 +2,8 @@ use ratatui::widgets::ListState;
 
 use crate::service::{fetch_logs, fetch_services, SystemdService};
 
+pub const STATUS_OPTIONS: [&str; 5] = ["All", "running", "exited", "failed", "dead"];
+
 pub struct App {
     pub services: Vec<SystemdService>,
     pub list_state: ListState,
@@ -16,6 +18,8 @@ pub struct App {
     pub status_filter: Option<String>,
     pub show_logs: bool,
     pub show_help: bool,
+    pub show_status_picker: bool,
+    pub status_picker_state: ListState,
     pub log_search_query: String,
     pub log_search_mode: bool,
     pub log_search_matches: Vec<usize>,
@@ -38,6 +42,8 @@ impl App {
             status_filter: None,
             show_logs: false,
             show_help: false,
+            show_status_picker: false,
+            status_picker_state: ListState::default(),
             log_search_query: String::new(),
             log_search_mode: false,
             log_search_matches: Vec::new(),
@@ -103,21 +109,49 @@ impl App {
         self.update_filter();
     }
 
-    pub fn cycle_status_filter(&mut self) {
-        self.status_filter = match self.status_filter.as_deref() {
-            None => Some("running".to_string()),
-            Some("running") => Some("exited".to_string()),
-            Some("exited") => Some("failed".to_string()),
-            Some("failed") => Some("dead".to_string()),
-            Some("dead") => None,
-            _ => None,
+    pub fn open_status_picker(&mut self) {
+        self.show_status_picker = true;
+        // Pre-select the current filter
+        let index = match &self.status_filter {
+            None => 0, // "All"
+            Some(s) => STATUS_OPTIONS
+                .iter()
+                .position(|&opt| opt == s)
+                .unwrap_or(0),
         };
-        self.update_filter();
+        self.status_picker_state.select(Some(index));
     }
 
-    pub fn clear_status_filter(&mut self) {
-        self.status_filter = None;
-        self.update_filter();
+    pub fn close_status_picker(&mut self) {
+        self.show_status_picker = false;
+    }
+
+    pub fn status_picker_next(&mut self) {
+        let i = self.status_picker_state.selected().unwrap_or(0);
+        let next = (i + 1) % STATUS_OPTIONS.len();
+        self.status_picker_state.select(Some(next));
+    }
+
+    pub fn status_picker_previous(&mut self) {
+        let i = self.status_picker_state.selected().unwrap_or(0);
+        let prev = if i == 0 {
+            STATUS_OPTIONS.len() - 1
+        } else {
+            i - 1
+        };
+        self.status_picker_state.select(Some(prev));
+    }
+
+    pub fn status_picker_confirm(&mut self) {
+        if let Some(i) = self.status_picker_state.selected() {
+            if i == 0 {
+                self.status_filter = None;
+            } else {
+                self.status_filter = Some(STATUS_OPTIONS[i].to_string());
+            }
+            self.update_filter();
+        }
+        self.show_status_picker = false;
     }
 
     pub fn next(&mut self) {
