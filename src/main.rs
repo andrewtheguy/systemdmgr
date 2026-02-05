@@ -110,7 +110,7 @@ fn main() -> io::Result<()> {
                         if !app.log_search_query.is_empty() {
                             app.clear_log_search();
                         } else {
-                            app.should_quit = true;
+                            app.show_logs = false;
                         }
                     }
                     KeyCode::Char('/') => {
@@ -160,8 +160,6 @@ fn main() -> io::Result<()> {
                     KeyCode::Esc => {
                         if !app.search_query.is_empty() {
                             app.clear_search();
-                        } else {
-                            app.should_quit = true;
                         }
                     }
                     KeyCode::Char('/') => {
