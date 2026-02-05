@@ -66,7 +66,34 @@ pub fn render(frame: &mut Frame, app: &mut App) {
     };
 
     // Header / Search bar
-    let header = if app.search_mode {
+    let header = if app.log_search_mode {
+        let match_info = if app.log_search_matches.is_empty() {
+            if app.log_search_query.is_empty() {
+                String::new()
+            } else {
+                " (no matches)".to_string()
+            }
+        } else {
+            format!(
+                " ({}/{})",
+                app.log_search_match_index.map_or(0, |i| i + 1),
+                app.log_search_matches.len()
+            )
+        };
+        let search_text = format!("/{}_{}",  app.log_search_query, match_info);
+        Paragraph::new(search_text)
+            .style(Style::default().fg(Color::Magenta))
+            .block(Block::default().borders(Borders::ALL).title("Log Search"))
+    } else if !app.log_search_query.is_empty() && app.show_logs {
+        let match_info = format!(
+            "Log search: \"{}\" ({} matches) | n/N: Next/Prev",
+            app.log_search_query,
+            app.log_search_matches.len()
+        );
+        Paragraph::new(match_info)
+            .style(Style::default().fg(Color::Magenta))
+            .block(Block::default().borders(Borders::ALL))
+    } else if app.search_mode {
         let search_text = format!("/{}_", app.search_query);
         Paragraph::new(search_text)
             .style(Style::default().fg(Color::Yellow))
@@ -124,8 +151,19 @@ pub fn render(frame: &mut Frame, app: &mut App) {
             )
         };
 
+        let services_border_style = if app.show_logs {
+            Style::default().fg(Color::DarkGray)
+        } else {
+            Style::default()
+        };
+
         let list = List::new(items)
-            .block(Block::default().borders(Borders::ALL).title(title))
+            .block(
+                Block::default()
+                    .borders(Borders::ALL)
+                    .title(title)
+                    .border_style(services_border_style),
+            )
             .highlight_style(
                 Style::default()
                     .bg(Color::DarkGray)
@@ -144,16 +182,21 @@ pub fn render(frame: &mut Frame, app: &mut App) {
             "Logs".to_string()
         };
 
+        let focused_suffix = " [FOCUSED]";
+
         // Calculate visible area (subtract 2 for borders)
         let visible_lines = logs_area.height.saturating_sub(2) as usize;
 
-        // Create log content with scroll
+        // Create log content with scroll and search highlighting
         let log_lines: Vec<Line> = app
             .logs
             .iter()
+            .enumerate()
             .skip(app.logs_scroll)
             .take(visible_lines)
-            .map(|line| Line::from(line.as_str()))
+            .map(|(line_idx, line)| {
+                highlight_search_in_line(line, line_idx, app)
+            })
             .collect();
 
         let scroll_info = if !app.logs.is_empty() {
@@ -167,13 +210,15 @@ pub fn render(frame: &mut Frame, app: &mut App) {
             String::new()
         };
 
+        let border_style = Style::default().fg(Color::Yellow);
+
         let logs_paragraph = Paragraph::new(log_lines)
             .style(Style::default().fg(Color::White))
             .block(
                 Block::default()
                     .borders(Borders::ALL)
-                    .title(format!("{}{}", logs_title, scroll_info))
-                    .border_style(Style::default().fg(Color::Cyan)),
+                    .title(format!("{}{}{}", logs_title, focused_suffix, scroll_info))
+                    .border_style(border_style),
             )
             .wrap(Wrap { trim: false });
 
@@ -181,7 +226,13 @@ pub fn render(frame: &mut Frame, app: &mut App) {
     }
 
     // Footer with keybindings
-    let footer_text = if app.search_mode {
+    let footer_text = if app.log_search_mode {
+        "Type to search logs | Esc/Enter: Exit search | ?: Help"
+    } else if app.show_logs && !app.log_search_query.is_empty() {
+        "l: Exit logs | j/k: Scroll | n/N: Next/Prev match | Esc: Clear | ?: Help"
+    } else if app.show_logs {
+        "l: Exit logs | j/k: Scroll | g/G: Top/Bottom | /: Search logs | ?: Help"
+    } else if app.search_mode {
         "Type to search | Esc/Enter: Exit search | ?: Help"
     } else if !app.search_query.is_empty() || app.status_filter.is_some() {
         "q: Quit | /: Search | s: Status | l: Logs | Esc: Clear | ?: Help"
@@ -195,63 +246,108 @@ pub fn render(frame: &mut Frame, app: &mut App) {
 
     // Help overlay
     if app.show_help {
-        render_help(frame);
+        render_help(frame, app);
     }
 }
 
-fn render_help(frame: &mut Frame) {
-    let help_text = vec![
-        Line::from(vec![Span::styled(
-            "Navigation",
-            Style::default()
-                .fg(Color::Yellow)
-                .add_modifier(Modifier::BOLD),
-        )]),
+fn highlight_search_in_line<'a>(line: &str, line_idx: usize, app: &App) -> Line<'a> {
+    if app.log_search_query.is_empty() {
+        return Line::from(line.to_string());
+    }
+
+    let query_lower = app.log_search_query.to_lowercase();
+    let line_lower = line.to_lowercase();
+
+    if !line_lower.contains(&query_lower) {
+        return Line::from(line.to_string());
+    }
+
+    // Determine if this line is the current match
+    let is_current_match = app.log_search_match_index.is_some_and(|mi| {
+        app.log_search_matches
+            .get(mi)
+            .is_some_and(|&idx| idx == line_idx)
+    });
+
+    let highlight_style = if is_current_match {
+        Style::default().bg(Color::Yellow).fg(Color::Black)
+    } else {
+        Style::default().bg(Color::DarkGray).fg(Color::Yellow)
+    };
+
+    let mut spans = Vec::new();
+    let mut pos = 0;
+    let query_len = app.log_search_query.len();
+
+    while pos < line.len() {
+        if let Some(match_start) = line_lower[pos..].find(&query_lower) {
+            let abs_start = pos + match_start;
+            if abs_start > pos {
+                spans.push(Span::raw(line[pos..abs_start].to_string()));
+            }
+            spans.push(Span::styled(
+                line[abs_start..abs_start + query_len].to_string(),
+                highlight_style,
+            ));
+            pos = abs_start + query_len;
+        } else {
+            spans.push(Span::raw(line[pos..].to_string()));
+            break;
+        }
+    }
+
+    Line::from(spans)
+}
+
+fn render_help(frame: &mut Frame, app: &App) {
+    let section_style = Style::default()
+        .fg(Color::Yellow)
+        .add_modifier(Modifier::BOLD);
+
+    let mut help_text = vec![
+        Line::from(vec![Span::styled("Navigation", section_style)]),
         Line::from("  j / Down      Move down"),
         Line::from("  k / Up        Move up"),
         Line::from("  g / Home      Go to top"),
         Line::from("  G / End       Go to bottom"),
         Line::from(""),
-        Line::from(vec![Span::styled(
-            "Search & Filter",
-            Style::default()
-                .fg(Color::Yellow)
-                .add_modifier(Modifier::BOLD),
-        )]),
+        Line::from(vec![Span::styled("Search & Filter", section_style)]),
         Line::from("  /             Start search"),
         Line::from("  s             Cycle status filter"),
         Line::from("  S             Clear status filter"),
         Line::from("  Esc           Clear search/filter"),
         Line::from(""),
-        Line::from(vec![Span::styled(
-            "Logs Panel",
-            Style::default()
-                .fg(Color::Yellow)
-                .add_modifier(Modifier::BOLD),
-        )]),
+        Line::from(vec![Span::styled("Logs Panel", section_style)]),
         Line::from("  l             Toggle logs panel"),
         Line::from("  PgUp/PgDn     Scroll list/logs"),
         Line::from("  Ctrl+u/d      Scroll logs half page"),
         Line::from(""),
-        Line::from(vec![Span::styled(
-            "Mouse",
-            Style::default()
-                .fg(Color::Yellow)
-                .add_modifier(Modifier::BOLD),
-        )]),
+    ];
+
+    if app.show_logs {
+        help_text.extend(vec![
+            Line::from(vec![Span::styled("Log Focus Mode", section_style)]),
+            Line::from("  j/k / Up/Down Scroll logs"),
+            Line::from("  g / Home      Go to top of logs"),
+            Line::from("  G / End       Go to bottom of logs"),
+            Line::from("  /             Search within logs"),
+            Line::from("  n / N         Next/Prev search match"),
+            Line::from("  l             Exit log mode"),
+            Line::from("  Esc           Clear log search"),
+            Line::from(""),
+        ]);
+    }
+
+    help_text.extend(vec![
+        Line::from(vec![Span::styled("Mouse", section_style)]),
         Line::from("  Click         Select service"),
         Line::from("  Scroll        Navigate list/logs"),
         Line::from(""),
-        Line::from(vec![Span::styled(
-            "Other",
-            Style::default()
-                .fg(Color::Yellow)
-                .add_modifier(Modifier::BOLD),
-        )]),
+        Line::from(vec![Span::styled("Other", section_style)]),
         Line::from("  r             Refresh services"),
         Line::from("  ?             Toggle this help"),
         Line::from("  q / Esc       Quit"),
-    ];
+    ]);
 
     let area = centered_rect(50, 70, frame.area());
 

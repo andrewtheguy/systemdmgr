@@ -47,7 +47,7 @@ fn main() -> io::Result<()> {
             let visible_services = ui::get_services_visible_lines(&terminal.get_frame(), app.show_logs);
 
             if app.search_mode {
-                // Handle search mode input
+                // Branch 1: Service search mode (only reachable when show_logs=false)
                 match key.code {
                     KeyCode::Esc | KeyCode::Enter => {
                         app.search_mode = false;
@@ -63,18 +63,10 @@ fn main() -> io::Result<()> {
                         app.previous();
                     }
                     KeyCode::PageUp => {
-                        if app.show_logs {
-                            app.scroll_logs_up(visible_lines);
-                        } else {
-                            app.page_up(visible_services);
-                        }
+                        app.page_up(visible_services);
                     }
                     KeyCode::PageDown => {
-                        if app.show_logs {
-                            app.scroll_logs_down(visible_lines, visible_lines);
-                        } else {
-                            app.page_down(visible_services);
-                        }
+                        app.page_down(visible_services);
                     }
                     KeyCode::Char(c) => {
                         app.search_query.push(c);
@@ -82,8 +74,82 @@ fn main() -> io::Result<()> {
                     }
                     _ => {}
                 }
+            } else if app.log_search_mode {
+                // Branch 2: Log search typing mode
+                match key.code {
+                    KeyCode::Esc | KeyCode::Enter => {
+                        app.log_search_mode = false;
+                    }
+                    KeyCode::Backspace => {
+                        app.log_search_query.pop();
+                        app.update_log_search();
+                    }
+                    KeyCode::PageUp => {
+                        app.scroll_logs_up(visible_lines);
+                    }
+                    KeyCode::PageDown => {
+                        app.scroll_logs_down(visible_lines, visible_lines);
+                    }
+                    KeyCode::Char(c) => {
+                        app.log_search_query.push(c);
+                        app.update_log_search();
+                    }
+                    _ => {}
+                }
+            } else if app.show_logs {
+                // Branch 3: Log focus normal mode
+                match key.code {
+                    KeyCode::Char('q') => {
+                        app.should_quit = true;
+                    }
+                    KeyCode::Char('l') => {
+                        app.clear_log_search();
+                        app.toggle_logs();
+                    }
+                    KeyCode::Esc => {
+                        if !app.log_search_query.is_empty() {
+                            app.clear_log_search();
+                        } else {
+                            app.should_quit = true;
+                        }
+                    }
+                    KeyCode::Char('/') => {
+                        app.log_search_mode = true;
+                    }
+                    KeyCode::Char('n') => {
+                        app.next_log_match(visible_lines);
+                    }
+                    KeyCode::Char('N') => {
+                        app.prev_log_match(visible_lines);
+                    }
+                    KeyCode::Char('j') | KeyCode::Down => {
+                        app.scroll_logs_down(1, visible_lines);
+                    }
+                    KeyCode::Char('k') | KeyCode::Up => {
+                        app.scroll_logs_up(1);
+                    }
+                    KeyCode::Char('g') | KeyCode::Home => {
+                        app.logs_go_to_top();
+                    }
+                    KeyCode::Char('G') | KeyCode::End => {
+                        app.logs_go_to_bottom(visible_lines);
+                    }
+                    KeyCode::PageUp => {
+                        app.scroll_logs_up(visible_lines);
+                    }
+                    KeyCode::PageDown => {
+                        app.scroll_logs_down(visible_lines, visible_lines);
+                    }
+                    KeyCode::Char('u') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                        app.scroll_logs_up(visible_lines / 2);
+                    }
+                    KeyCode::Char('d') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                        app.scroll_logs_down(visible_lines / 2, visible_lines);
+                    }
+                    _ => {}
+                }
             } else {
-                // Normal mode input
+                // Branch 4: Service normal mode
                 match key.code {
                     KeyCode::Char('q') => {
                         app.should_quit = true;
@@ -123,24 +189,10 @@ fn main() -> io::Result<()> {
                         app.clear_status_filter();
                     }
                     KeyCode::PageUp => {
-                        if app.show_logs {
-                            app.scroll_logs_up(visible_lines);
-                        } else {
-                            app.page_up(visible_services);
-                        }
+                        app.page_up(visible_services);
                     }
                     KeyCode::PageDown => {
-                        if app.show_logs {
-                            app.scroll_logs_down(visible_lines, visible_lines);
-                        } else {
-                            app.page_down(visible_services);
-                        }
-                    }
-                    KeyCode::Char('u') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                        app.scroll_logs_up(visible_lines / 2);
-                    }
-                    KeyCode::Char('d') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                        app.scroll_logs_down(visible_lines / 2, visible_lines);
+                        app.page_down(visible_services);
                     }
                     _ => {}
                 }
@@ -178,38 +230,44 @@ fn handle_mouse_event(app: &mut App, mouse: MouseEvent, frame_size: Rect) {
 
     let regions = ui::get_layout_regions(frame_size, app.show_logs);
 
-    match mouse.kind {
-        MouseEventKind::Down(MouseButton::Left) => {
-            if mouse_in_rect(mouse, regions.services_list) {
-                // Click-to-select: calculate which item was clicked
-                // Subtract 1 for the border/title row
-                let y_in_list = mouse.row.saturating_sub(regions.services_list.y + 1);
-                let clicked_index = app.list_state.offset() + y_in_list as usize;
-                if clicked_index < app.filtered_indices.len() {
-                    app.list_state.select(Some(clicked_index));
+    if app.show_logs {
+        // Log mode: all scroll events go to logs, clicks are ignored
+        if let Some(logs) = regions.logs_panel {
+            let visible = logs.height.saturating_sub(2) as usize;
+            match mouse.kind {
+                MouseEventKind::ScrollUp => {
+                    app.scroll_logs_up(3);
+                }
+                MouseEventKind::ScrollDown => {
+                    app.scroll_logs_down(3, visible);
+                }
+                _ => {}
+            }
+        }
+    } else {
+        // Service mode: existing behavior
+        match mouse.kind {
+            MouseEventKind::Down(MouseButton::Left) => {
+                if mouse_in_rect(mouse, regions.services_list) {
+                    let y_in_list = mouse.row.saturating_sub(regions.services_list.y + 1);
+                    let clicked_index = app.list_state.offset() + y_in_list as usize;
+                    if clicked_index < app.filtered_indices.len() {
+                        app.list_state.select(Some(clicked_index));
+                    }
                 }
             }
-        }
-        MouseEventKind::ScrollUp => {
-            if mouse_in_rect(mouse, regions.services_list) {
-                app.previous();
-            } else if let Some(logs) = regions.logs_panel
-                && mouse_in_rect(mouse, logs)
-            {
-                app.scroll_logs_up(3);
+            MouseEventKind::ScrollUp => {
+                if mouse_in_rect(mouse, regions.services_list) {
+                    app.previous();
+                }
             }
-        }
-        MouseEventKind::ScrollDown => {
-            if mouse_in_rect(mouse, regions.services_list) {
-                app.next();
-            } else if let Some(logs) = regions.logs_panel
-                && mouse_in_rect(mouse, logs)
-            {
-                let visible = logs.height.saturating_sub(2) as usize;
-                app.scroll_logs_down(3, visible);
+            MouseEventKind::ScrollDown => {
+                if mouse_in_rect(mouse, regions.services_list) {
+                    app.next();
+                }
             }
+            _ => {}
         }
-        _ => {}
     }
 }
 

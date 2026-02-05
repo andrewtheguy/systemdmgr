@@ -16,6 +16,10 @@ pub struct App {
     pub status_filter: Option<String>,
     pub show_logs: bool,
     pub show_help: bool,
+    pub log_search_query: String,
+    pub log_search_mode: bool,
+    pub log_search_matches: Vec<usize>,
+    pub log_search_match_index: Option<usize>,
 }
 
 impl App {
@@ -34,6 +38,10 @@ impl App {
             status_filter: None,
             show_logs: false,
             show_help: false,
+            log_search_query: String::new(),
+            log_search_mode: false,
+            log_search_matches: Vec::new(),
+            log_search_match_index: None,
         };
         app.load_services();
         app
@@ -171,6 +179,7 @@ impl App {
         if current_service != self.last_selected_service {
             self.last_selected_service = current_service.clone();
             self.logs_scroll = 0;
+            self.clear_log_search();
 
             if let Some(unit) = current_service {
                 match fetch_logs(&unit, 1000) {
@@ -227,5 +236,75 @@ impl App {
         let max_index = self.filtered_indices.len().saturating_sub(1);
         let new_index = (current + page_size).min(max_index);
         self.list_state.select(Some(new_index));
+    }
+
+    pub fn update_log_search(&mut self) {
+        self.log_search_matches.clear();
+        self.log_search_match_index = None;
+
+        if self.log_search_query.is_empty() {
+            return;
+        }
+
+        let query = self.log_search_query.to_lowercase();
+        for (i, line) in self.logs.iter().enumerate() {
+            if line.to_lowercase().contains(&query) {
+                self.log_search_matches.push(i);
+            }
+        }
+
+        // Auto-scroll to first match
+        if !self.log_search_matches.is_empty() {
+            self.log_search_match_index = Some(0);
+            self.logs_scroll = self.log_search_matches[0];
+        }
+    }
+
+    pub fn clear_log_search(&mut self) {
+        self.log_search_query.clear();
+        self.log_search_matches.clear();
+        self.log_search_match_index = None;
+    }
+
+    pub fn next_log_match(&mut self, visible_lines: usize) {
+        if self.log_search_matches.is_empty() {
+            return;
+        }
+        let next = match self.log_search_match_index {
+            Some(i) => (i + 1) % self.log_search_matches.len(),
+            None => 0,
+        };
+        self.log_search_match_index = Some(next);
+        let line_idx = self.log_search_matches[next];
+        // Scroll so match is visible
+        if line_idx < self.logs_scroll || line_idx >= self.logs_scroll + visible_lines {
+            self.logs_scroll = line_idx;
+        }
+    }
+
+    pub fn prev_log_match(&mut self, visible_lines: usize) {
+        if self.log_search_matches.is_empty() {
+            return;
+        }
+        let prev = match self.log_search_match_index {
+            Some(0) => self.log_search_matches.len() - 1,
+            Some(i) => i - 1,
+            None => self.log_search_matches.len() - 1,
+        };
+        self.log_search_match_index = Some(prev);
+        let line_idx = self.log_search_matches[prev];
+        if line_idx < self.logs_scroll || line_idx >= self.logs_scroll + visible_lines {
+            self.logs_scroll = line_idx;
+        }
+    }
+
+    pub fn logs_go_to_top(&mut self) {
+        self.logs_scroll = 0;
+    }
+
+    pub fn logs_go_to_bottom(&mut self, visible_lines: usize) {
+        if !self.logs.is_empty() {
+            self.logs_scroll = self.logs.len().saturating_sub(visible_lines);
+        }
     }
 }
