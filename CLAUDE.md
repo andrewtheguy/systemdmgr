@@ -1,5 +1,7 @@
 # Project Instructions
 
+* No backward compatibility for any changes *
+
 ## After Code Changes
 
 After making any code updates, always run:
