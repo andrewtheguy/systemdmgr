@@ -111,7 +111,8 @@ pub fn render(frame: &mut Frame, app: &mut App) {
             .style(Style::default().fg(Color::Green))
             .block(Block::default().borders(Borders::ALL))
     } else {
-        Paragraph::new("SystemD Services")
+        let scope_label = if app.user_mode { "User" } else { "System" };
+        Paragraph::new(format!("SystemD Services [{}]", scope_label))
             .style(Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD))
             .block(Block::default().borders(Borders::ALL))
     };
@@ -229,15 +230,15 @@ pub fn render(frame: &mut Frame, app: &mut App) {
     let footer_text = if app.log_search_mode {
         "Type to search logs | Esc/Enter: Exit search | ?: Help"
     } else if app.show_logs && !app.log_search_query.is_empty() {
-        "l: Exit logs | j/k: Scroll | n/N: Next/Prev match | Esc: Clear | ?: Help"
+        "l: Exit logs | j/k: Scroll | n/N: Next/Prev match | u: User/System | Esc: Clear | ?: Help"
     } else if app.show_logs {
-        "l: Exit logs | j/k: Scroll | g/G: Top/Bottom | /: Search logs | ?: Help"
+        "l: Exit logs | j/k: Scroll | g/G: Top/Bottom | /: Search logs | u: User/System | ?: Help"
     } else if app.search_mode {
         "Type to search | Esc/Enter: Exit search | ?: Help"
     } else if !app.search_query.is_empty() || app.status_filter.is_some() {
-        "q: Quit | /: Search | s: Status | l: Logs | Esc: Clear | ?: Help"
+        "q: Quit | /: Search | s: Status | l: Logs | u: User/System | Esc: Clear | ?: Help"
     } else {
-        "q/Esc: Quit | /: Search | s: Status | l: Logs | ?: Help"
+        "q/Esc: Quit | /: Search | s: Status | l: Logs | u: User/System | ?: Help"
     };
     let footer = Paragraph::new(footer_text)
         .style(Style::default().fg(Color::DarkGray))
@@ -349,6 +350,7 @@ fn render_help(frame: &mut Frame, app: &App) {
         Line::from(""),
         Line::from(vec![Span::styled("Other", section_style)]),
         Line::from("  r             Refresh services"),
+        Line::from("  u             Toggle user/system"),
         Line::from("  ?             Toggle this help"),
         Line::from("  q / Esc       Quit"),
     ]);

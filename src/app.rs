@@ -24,6 +24,7 @@ pub struct App {
     pub log_search_mode: bool,
     pub log_search_matches: Vec<usize>,
     pub log_search_match_index: Option<usize>,
+    pub user_mode: bool,
 }
 
 impl App {
@@ -48,13 +49,14 @@ impl App {
             log_search_mode: false,
             log_search_matches: Vec::new(),
             log_search_match_index: None,
+            user_mode: false,
         };
         app.load_services();
         app
     }
 
     pub fn load_services(&mut self) {
-        match fetch_services() {
+        match fetch_services(self.user_mode) {
             Ok(services) => {
                 self.services = services;
                 self.error = None;
@@ -216,7 +218,7 @@ impl App {
             self.clear_log_search();
 
             if let Some(unit) = current_service {
-                match fetch_logs(&unit, 1000) {
+                match fetch_logs(&unit, 1000, self.user_mode) {
                     Ok(logs) => {
                         self.logs = logs;
                         // Auto-scroll to bottom (most recent logs)
@@ -340,5 +342,13 @@ impl App {
         if !self.logs.is_empty() {
             self.logs_scroll = self.logs.len().saturating_sub(visible_lines);
         }
+    }
+
+    pub fn toggle_user_mode(&mut self) {
+        self.user_mode = !self.user_mode;
+        self.last_selected_service = None;
+        self.logs.clear();
+        self.clear_log_search();
+        self.load_services();
     }
 }

@@ -29,9 +29,10 @@ impl SystemdService {
     }
 }
 
-pub fn fetch_logs(unit_name: &str, lines: usize) -> Result<Vec<String>, String> {
+pub fn fetch_logs(unit_name: &str, lines: usize, user_mode: bool) -> Result<Vec<String>, String> {
+    let unit_flag = if user_mode { "--user-unit" } else { "-u" };
     let output = Command::new("journalctl")
-        .args(["-u", unit_name, "-n", &lines.to_string(), "--no-pager"])
+        .args([unit_flag, unit_name, "-n", &lines.to_string(), "--no-pager"])
         .output()
         .map_err(|e| format!("Failed to execute journalctl: {}", e))?;
 
@@ -41,9 +42,14 @@ pub fn fetch_logs(unit_name: &str, lines: usize) -> Result<Vec<String>, String> 
         .collect())
 }
 
-pub fn fetch_services() -> Result<Vec<SystemdService>, String> {
+pub fn fetch_services(user_mode: bool) -> Result<Vec<SystemdService>, String> {
+    let mut args = Vec::new();
+    if user_mode {
+        args.push("--user");
+    }
+    args.extend(["list-units", "--type=service", "--all", "--no-pager", "--output=json"]);
     let output = Command::new("systemctl")
-        .args(["list-units", "--type=service", "--all", "--no-pager", "--output=json"])
+        .args(&args)
         .output()
         .map_err(|e| format!("Failed to execute systemctl: {}", e))?;
 

@@ -158,6 +158,9 @@ fn main() -> io::Result<()> {
                     KeyCode::Char('d') if key.modifiers.contains(KeyModifiers::CONTROL) => {
                         app.scroll_logs_down(visible_lines / 2, visible_lines);
                     }
+                    KeyCode::Char('u') => {
+                        app.toggle_user_mode();
+                    }
                     _ => {}
                 }
             } else {
@@ -191,6 +194,9 @@ fn main() -> io::Result<()> {
                     }
                     KeyCode::Char('r') => {
                         app.load_services();
+                    }
+                    KeyCode::Char('u') => {
+                        app.toggle_user_mode();
                     }
                     KeyCode::Char('s') => {
                         app.open_status_picker();
