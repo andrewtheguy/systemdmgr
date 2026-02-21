@@ -63,10 +63,10 @@ systemdview (v0.0.1-alpha) is a terminal UI for browsing systemd services, built
 | **Listing & Browsing** | | | |
 | List system services | Yes | Yes | Done |
 | List user services | Yes | Yes | Done |
-| List timer units | Yes | No | Phase 2 |
-| List socket units | Yes | No | Phase 2 |
-| List target units | Yes | No | Phase 2 |
-| List path units | Yes | No | Phase 2 |
+| List timer units | Yes | Yes | Done |
+| List socket units | Yes | Yes | Done |
+| List target units | Yes | Yes | Done |
+| List path units | Yes | Yes | Done |
 | **Status & Filtering** | | | |
 | Color-coded status display | Yes | Yes | Done |
 | Filter by runtime state (running/exited/failed/dead) | Yes | Yes | Done |
@@ -108,7 +108,7 @@ systemdview (v0.0.1-alpha) is a terminal UI for browsing systemd services, built
 
 ---
 
-### Phase 2: Additional Unit Types
+### Phase 2: Additional Unit Types — Done
 
 **Goal:** Extend beyond services to browse timers, sockets, targets, and paths — matching Cockpit's tabbed unit type interface.
 
