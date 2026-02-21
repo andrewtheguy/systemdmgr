@@ -75,10 +75,10 @@ systemdview (v0.0.1-alpha) is a terminal UI for browsing systemd services, built
 | **Log Viewing** | | | |
 | View unit logs | Yes | Yes | Done |
 | Search within logs | Yes | Yes | Done |
-| Real-time log streaming (follow) | Yes | No | Phase 3 |
 | Filter by log severity/priority | Yes | No | Phase 3 |
 | Filter by time range | Yes | No | Phase 3 |
 | Structured log metadata (PID, priority, timestamp) | Yes | No | Phase 3 |
+| Real-time log streaming (follow) | Yes | No | Phase 5 |
 | **Unit Details** | | | |
 | Unit file path display | Yes | No | Phase 4 |
 | Unit dependencies (Requires/Wants/After/Before/Conflicts) | Yes | No | Phase 4 |
@@ -179,27 +179,15 @@ Adapt `App.update_filter()` (`src/app.rs:72-105`) — the status filter options 
 
 ### Phase 3: Enhanced Log Viewing
 
-**Goal:** Improve log viewing with real-time streaming, severity filtering, and time-range filtering.
+**Goal:** Improve log viewing with severity filtering, time-range filtering, and structured metadata.
 
 **Features:**
-- Real-time log streaming (follow mode, like `journalctl -f`)
 - Filter by severity/priority level
 - Filter by time range
 - Display structured log metadata (timestamp, PID, priority)
 - Color-code log lines by severity
 
 **Implementation details:**
-
-**Real-time streaming:**
-
-Currently `fetch_logs()` (`src/service.rs:32-42`) runs a one-shot `journalctl` command and collects all output. For real-time streaming:
-
-- Spawn `journalctl -f -u <unit> --no-pager` as a child process using `std::process::Command::spawn()` instead of `.output()`
-- Read stdout line-by-line from a background thread (or using non-blocking I/O)
-- Append new lines to `app.logs` and auto-scroll if the user is at the bottom
-- Add a `follow_mode: bool` field to `App` — toggled with `f` key
-- When follow mode is off, fall back to the current one-shot fetch behavior
-- Kill the child process when switching units or exiting follow mode
 
 **Severity/priority filtering:**
 
@@ -376,6 +364,27 @@ nginx.service (running)
 ```
 
 Limit depth to avoid circular dependencies (systemd allows cycles via `After`/`Before` ordering). Use a visited set to prevent infinite loops.
+
+### Phase 5: Real-Time Log Streaming
+
+**Goal:** Add live log streaming so users can watch logs update in real time, like `journalctl -f`.
+
+**Features:**
+- Real-time log streaming (follow mode, like `journalctl -f`)
+- Toggle follow mode on/off
+
+**Implementation details:**
+
+Currently `fetch_logs()` runs a one-shot `journalctl` command and collects all output. For real-time streaming:
+
+- Spawn `journalctl -f -u <unit> --no-pager` as a child process using `std::process::Command::spawn()` instead of `.output()`
+- Read stdout line-by-line from a background thread (or using non-blocking I/O)
+- Append new lines to `app.logs` and auto-scroll if the user is at the bottom
+- Add a `follow_mode: bool` field to `App` — toggled with `f` key
+- When follow mode is off, fall back to the current one-shot fetch behavior
+- Kill the child process when switching units or exiting follow mode
+
+---
 
 ## Out of Scope
 
