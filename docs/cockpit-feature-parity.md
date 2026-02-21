@@ -50,7 +50,6 @@ systemdview (v0.0.1-alpha) is a terminal UI for browsing systemd services, built
 
 ### What's Missing (Read-Only Features)
 
-- No user-level unit support (only system units)
 - Only service unit type (no timers, sockets, targets, paths)
 - No real-time log streaming (static fetch only)
 - No log severity or time-range filtering
@@ -63,7 +62,7 @@ systemdview (v0.0.1-alpha) is a terminal UI for browsing systemd services, built
 |---------|---------|-------------|--------|
 | **Listing & Browsing** | | | |
 | List system services | Yes | Yes | Done |
-| List user services | Yes | No | Phase 1 |
+| List user services | Yes | Yes | Done |
 | List timer units | Yes | No | Phase 2 |
 | List socket units | Yes | No | Phase 2 |
 | List target units | Yes | No | Phase 2 |
@@ -88,40 +87,24 @@ systemdview (v0.0.1-alpha) is a terminal UI for browsing systemd services, built
 
 ## Roadmap
 
-### Phase 1: User/System Unit Toggle
+### Phase 1: User/System Unit Toggle — Done
 
 **Goal:** Allow switching between system-level and user-level systemd units.
 
 **Features:**
-- Toggle between system and user unit scope
-- Display current scope (System/User) in the header
-- Fetch user-level logs correctly
+- Toggle between system and user unit scope via `u` keybinding
+- Display current scope (`[System]` / `[User]`) in the header
+- Fetch user-level logs correctly using `journalctl --user-unit`
 - Persist scope across refreshes within a session
 
-**Implementation details:**
-
-Add a `scope` field to the `App` struct (`src/app.rs:7`):
-```rust
-pub enum UnitScope { System, User }
-```
-
-Modify `fetch_services()` (`src/service.rs:44-61`) to accept a scope parameter:
-- System: `systemctl list-units --type=service --all --no-pager --output=json` (current behavior)
-- User: `systemctl --user list-units --type=service --all --no-pager --output=json`
-
-Modify `fetch_logs()` (`src/service.rs:32-42`) to use the correct journalctl flag:
-- System: `journalctl -u <unit> -n <lines> --no-pager` (current behavior)
-- User: `journalctl --user-unit <unit> -n <lines> --no-pager`
-
-UI changes:
-- Add keybinding `u` to toggle scope (add to input handling in `src/main.rs`)
-- Show `[System]` or `[User]` indicator in the header (`src/ui.rs:113-117`)
-- Refresh the unit list on scope change (call `app.load_services()`)
-
-**Relevant systemd behavior:**
-- User units are per-user and don't require root privileges
-- User units are managed by `systemd --user` and stored in `~/.config/systemd/user/` and `/usr/lib/systemd/user/`
-- `journalctl --user-unit` accesses the user journal, which may require the user to be in the `systemd-journal` group
+**What was implemented:**
+- Added `user_mode: bool` field to `App` struct (`src/app.rs`)
+- `fetch_services(user_mode)` passes `--user` to systemctl when in user mode (`src/service.rs`)
+- `fetch_logs(unit, lines, user_mode)` uses `--user-unit` instead of `-u` for journalctl (`src/service.rs`)
+- `toggle_user_mode()` method resets log cache and reloads services (`src/app.rs`)
+- `u` keybinding works in both service normal mode and log focus mode (`src/main.rs`)
+- Header shows `SystemD Services [System]` or `SystemD Services [User]` (`src/ui.rs`)
+- Footer hints and help overlay updated with `u: User/System`
 
 ---
 
