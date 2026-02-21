@@ -54,6 +54,18 @@ fn main() -> io::Result<()> {
                 continue;
             }
 
+            // Type picker modal
+            if app.show_type_picker {
+                match key.code {
+                    KeyCode::Esc | KeyCode::Char('t') => app.close_type_picker(),
+                    KeyCode::Down | KeyCode::Char('j') => app.type_picker_next(),
+                    KeyCode::Up | KeyCode::Char('k') => app.type_picker_previous(),
+                    KeyCode::Enter => app.type_picker_confirm(),
+                    _ => {}
+                }
+                continue;
+            }
+
             // Calculate visible lines for scrolling
             let visible_lines = ui::get_logs_visible_lines(&terminal.get_frame(), app.show_logs);
             let visible_services = ui::get_services_visible_lines(&terminal.get_frame(), app.show_logs);
@@ -161,6 +173,9 @@ fn main() -> io::Result<()> {
                     KeyCode::Char('u') => {
                         app.toggle_user_mode();
                     }
+                    KeyCode::Char('t') => {
+                        app.open_type_picker();
+                    }
                     _ => {}
                 }
             } else {
@@ -201,6 +216,9 @@ fn main() -> io::Result<()> {
                     KeyCode::Char('s') => {
                         app.open_status_picker();
                     }
+                    KeyCode::Char('t') => {
+                        app.open_type_picker();
+                    }
                     KeyCode::PageUp => {
                         app.page_up(visible_services);
                     }
@@ -236,8 +254,8 @@ fn main() -> io::Result<()> {
 }
 
 fn handle_mouse_event(app: &mut App, mouse: MouseEvent, frame_size: Rect) {
-    // Don't handle mouse events when help or status picker is shown
-    if app.show_help || app.show_status_picker {
+    // Don't handle mouse events when help or picker is shown
+    if app.show_help || app.show_status_picker || app.show_type_picker {
         return;
     }
 

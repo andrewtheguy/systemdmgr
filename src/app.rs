@@ -1,11 +1,9 @@
 use ratatui::widgets::ListState;
 
-use crate::service::{fetch_logs, fetch_services, SystemdService};
-
-pub const STATUS_OPTIONS: [&str; 5] = ["All", "running", "exited", "failed", "dead"];
+use crate::service::{fetch_logs, fetch_units, SystemdUnit, UnitType, UNIT_TYPES};
 
 pub struct App {
-    pub services: Vec<SystemdService>,
+    pub services: Vec<SystemdUnit>,
     pub list_state: ListState,
     pub should_quit: bool,
     pub error: Option<String>,
@@ -25,6 +23,9 @@ pub struct App {
     pub log_search_matches: Vec<usize>,
     pub log_search_match_index: Option<usize>,
     pub user_mode: bool,
+    pub unit_type: UnitType,
+    pub show_type_picker: bool,
+    pub type_picker_state: ListState,
 }
 
 impl App {
@@ -50,13 +51,16 @@ impl App {
             log_search_matches: Vec::new(),
             log_search_match_index: None,
             user_mode: false,
+            unit_type: UnitType::Service,
+            show_type_picker: false,
+            type_picker_state: ListState::default(),
         };
         app.load_services();
         app
     }
 
     pub fn load_services(&mut self) {
-        match fetch_services(self.user_mode) {
+        match fetch_units(self.unit_type, self.user_mode) {
             Ok(services) => {
                 self.services = services;
                 self.error = None;
@@ -113,10 +117,10 @@ impl App {
 
     pub fn open_status_picker(&mut self) {
         self.show_status_picker = true;
-        // Pre-select the current filter
+        let options = self.unit_type.status_options();
         let index = match &self.status_filter {
             None => 0, // "All"
-            Some(s) => STATUS_OPTIONS
+            Some(s) => options
                 .iter()
                 .position(|&opt| opt == s)
                 .unwrap_or(0),
@@ -129,31 +133,75 @@ impl App {
     }
 
     pub fn status_picker_next(&mut self) {
+        let len = self.unit_type.status_options().len();
         let i = self.status_picker_state.selected().unwrap_or(0);
-        let next = (i + 1) % STATUS_OPTIONS.len();
+        let next = (i + 1) % len;
         self.status_picker_state.select(Some(next));
     }
 
     pub fn status_picker_previous(&mut self) {
+        let len = self.unit_type.status_options().len();
         let i = self.status_picker_state.selected().unwrap_or(0);
-        let prev = if i == 0 {
-            STATUS_OPTIONS.len() - 1
-        } else {
-            i - 1
-        };
+        let prev = if i == 0 { len - 1 } else { i - 1 };
         self.status_picker_state.select(Some(prev));
     }
 
     pub fn status_picker_confirm(&mut self) {
+        let options = self.unit_type.status_options();
         if let Some(i) = self.status_picker_state.selected() {
             if i == 0 {
                 self.status_filter = None;
             } else {
-                self.status_filter = Some(STATUS_OPTIONS[i].to_string());
+                self.status_filter = Some(options[i].to_string());
             }
             self.update_filter();
         }
         self.show_status_picker = false;
+    }
+
+    pub fn open_type_picker(&mut self) {
+        self.show_type_picker = true;
+        let index = UNIT_TYPES
+            .iter()
+            .position(|&t| t == self.unit_type)
+            .unwrap_or(0);
+        self.type_picker_state.select(Some(index));
+    }
+
+    pub fn close_type_picker(&mut self) {
+        self.show_type_picker = false;
+    }
+
+    pub fn type_picker_next(&mut self) {
+        let i = self.type_picker_state.selected().unwrap_or(0);
+        let next = (i + 1) % UNIT_TYPES.len();
+        self.type_picker_state.select(Some(next));
+    }
+
+    pub fn type_picker_previous(&mut self) {
+        let i = self.type_picker_state.selected().unwrap_or(0);
+        let prev = if i == 0 {
+            UNIT_TYPES.len() - 1
+        } else {
+            i - 1
+        };
+        self.type_picker_state.select(Some(prev));
+    }
+
+    pub fn type_picker_confirm(&mut self) {
+        if let Some(i) = self.type_picker_state.selected() {
+            let new_type = UNIT_TYPES[i];
+            if new_type != self.unit_type {
+                self.unit_type = new_type;
+                self.status_filter = None;
+                self.search_query.clear();
+                self.last_selected_service = None;
+                self.logs.clear();
+                self.clear_log_search();
+                self.load_services();
+            }
+        }
+        self.show_type_picker = false;
     }
 
     pub fn next(&mut self) {
@@ -202,7 +250,7 @@ impl App {
         }
     }
 
-    pub fn selected_service(&self) -> Option<&SystemdService> {
+    pub fn selected_unit(&self) -> Option<&SystemdUnit> {
         self.list_state
             .selected()
             .and_then(|i| self.filtered_indices.get(i))
@@ -210,7 +258,7 @@ impl App {
     }
 
     pub fn load_logs_for_selected(&mut self) {
-        let current_service = self.selected_service().map(|s| s.unit.clone());
+        let current_service = self.selected_unit().map(|s| s.unit.clone());
 
         if current_service != self.last_selected_service {
             self.last_selected_service = current_service.clone();

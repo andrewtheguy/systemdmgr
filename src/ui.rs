@@ -6,7 +6,8 @@ use ratatui::{
     Frame,
 };
 
-use crate::app::{App, STATUS_OPTIONS};
+use crate::app::App;
+use crate::service::UNIT_TYPES;
 
 /// Layout regions for mouse hit testing
 pub struct LayoutRegions {
@@ -112,7 +113,7 @@ pub fn render(frame: &mut Frame, app: &mut App) {
             .block(Block::default().borders(Borders::ALL))
     } else {
         let scope_label = if app.user_mode { "User" } else { "System" };
-        Paragraph::new(format!("SystemD Services [{}]", scope_label))
+        Paragraph::new(format!("SystemD {} [{}]", app.unit_type.label(), scope_label))
             .style(Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD))
             .block(Block::default().borders(Borders::ALL))
     };
@@ -129,24 +130,32 @@ pub fn render(frame: &mut Frame, app: &mut App) {
             .filtered_indices
             .iter()
             .map(|&i| &app.services[i])
-            .map(|service| {
-                let status_color = service.status_color();
-                let line = Line::from(vec![
+            .map(|unit| {
+                let status_color = unit.status_color();
+                let mut spans = vec![
                     Span::styled(
-                        format!("{:8}", service.status_display()),
+                        format!("{:8}", unit.status_display()),
                         Style::default().fg(status_color),
                     ),
-                    Span::styled(&service.unit, Style::default().fg(Color::White)),
-                ]);
-                ListItem::new(line)
+                    Span::styled(&unit.unit, Style::default().fg(Color::White)),
+                ];
+                if let Some(ref detail) = unit.detail {
+                    spans.push(Span::styled(
+                        format!("  ({})", detail),
+                        Style::default().fg(Color::DarkGray),
+                    ));
+                }
+                ListItem::new(Line::from(spans))
             })
             .collect();
 
+        let type_label = app.unit_type.label();
         let title = if app.search_query.is_empty() && app.status_filter.is_none() {
-            format!("Services ({})", app.services.len())
+            format!("{} ({})", type_label, app.services.len())
         } else {
             format!(
-                "Services ({}/{})",
+                "{} ({}/{})",
+                type_label,
                 app.filtered_indices.len(),
                 app.services.len()
             )
@@ -230,15 +239,15 @@ pub fn render(frame: &mut Frame, app: &mut App) {
     let footer_text = if app.log_search_mode {
         "Type to search logs | Esc/Enter: Exit search | ?: Help"
     } else if app.show_logs && !app.log_search_query.is_empty() {
-        "l: Exit logs | j/k: Scroll | n/N: Next/Prev match | u: User/System | Esc: Clear | ?: Help"
+        "l: Exit logs | j/k: Scroll | n/N: Next/Prev match | t: Type | u: User/System | Esc: Clear | ?: Help"
     } else if app.show_logs {
-        "l: Exit logs | j/k: Scroll | g/G: Top/Bottom | /: Search logs | u: User/System | ?: Help"
+        "l: Exit logs | j/k: Scroll | g/G: Top/Bottom | /: Search logs | t: Type | u: User/System | ?: Help"
     } else if app.search_mode {
         "Type to search | Esc/Enter: Exit search | ?: Help"
     } else if !app.search_query.is_empty() || app.status_filter.is_some() {
-        "q: Quit | /: Search | s: Status | l: Logs | u: User/System | Esc: Clear | ?: Help"
+        "q: Quit | /: Search | s: Status | t: Type | l: Logs | u: User/System | Esc: Clear | ?: Help"
     } else {
-        "q/Esc: Quit | /: Search | s: Status | l: Logs | u: User/System | ?: Help"
+        "q/Esc: Quit | /: Search | s: Status | t: Type | l: Logs | u: User/System | ?: Help"
     };
     let footer = Paragraph::new(footer_text)
         .style(Style::default().fg(Color::DarkGray))
@@ -248,6 +257,11 @@ pub fn render(frame: &mut Frame, app: &mut App) {
     // Status picker overlay
     if app.show_status_picker {
         render_status_picker(frame, app);
+    }
+
+    // Type picker overlay
+    if app.show_type_picker {
+        render_type_picker(frame, app);
     }
 
     // Help overlay
@@ -320,6 +334,7 @@ fn render_help(frame: &mut Frame, app: &App) {
         Line::from(vec![Span::styled("Search & Filter", section_style)]),
         Line::from("  /             Start search"),
         Line::from("  s             Open status filter"),
+        Line::from("  t             Open unit type picker"),
         Line::from("  Esc           Clear search/filter"),
         Line::from(""),
         Line::from(vec![Span::styled("Logs Panel", section_style)]),
@@ -371,7 +386,8 @@ fn render_help(frame: &mut Frame, app: &App) {
 }
 
 fn render_status_picker(frame: &mut Frame, app: &mut App) {
-    let items: Vec<ListItem> = STATUS_OPTIONS
+    let options = app.unit_type.status_options();
+    let items: Vec<ListItem> = options
         .iter()
         .map(|&opt| {
             let color = match opt {
@@ -380,6 +396,11 @@ fn render_status_picker(frame: &mut Frame, app: &mut App) {
                 "exited" => Color::Yellow,
                 "failed" => Color::Red,
                 "dead" => Color::DarkGray,
+                "waiting" => Color::Cyan,
+                "listening" => Color::Green,
+                "active" => Color::Green,
+                "inactive" => Color::DarkGray,
+                "elapsed" => Color::Yellow,
                 _ => Color::White,
             };
             let is_active = match (&app.status_filter, opt) {
@@ -406,9 +427,38 @@ fn render_status_picker(frame: &mut Frame, app: &mut App) {
                 .add_modifier(Modifier::BOLD),
         );
 
-    let area = centered_fixed_rect(30, STATUS_OPTIONS.len() as u16 + 2, frame.area());
+    let area = centered_fixed_rect(30, options.len() as u16 + 2, frame.area());
     frame.render_widget(Clear, area);
     frame.render_stateful_widget(list, area, &mut app.status_picker_state);
+}
+
+fn render_type_picker(frame: &mut Frame, app: &mut App) {
+    let items: Vec<ListItem> = UNIT_TYPES
+        .iter()
+        .map(|&ut| {
+            let is_active = ut == app.unit_type;
+            let marker = if is_active { " *" } else { "" };
+            let text = format!("  {}{}", ut.label(), marker);
+            ListItem::new(text).style(Style::default().fg(Color::Cyan))
+        })
+        .collect();
+
+    let list = List::new(items)
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .title("Unit Type")
+                .style(Style::default().bg(Color::Black)),
+        )
+        .highlight_style(
+            Style::default()
+                .bg(Color::DarkGray)
+                .add_modifier(Modifier::BOLD),
+        );
+
+    let area = centered_fixed_rect(30, UNIT_TYPES.len() as u16 + 2, frame.area());
+    frame.render_widget(Clear, area);
+    frame.render_stateful_widget(list, area, &mut app.type_picker_state);
 }
 
 fn centered_fixed_rect(width: u16, height: u16, area: Rect) -> Rect {
