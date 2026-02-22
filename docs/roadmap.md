@@ -23,17 +23,43 @@
 
 ---
 
+## Backlog
+
+### Basic Unit Actions
+
+Action picker modal (`x` key) with confirmation dialog for common systemd operations on the selected unit.
+
+**Supported actions:**
+
+| Action | systemctl verb | Shown when |
+|--------|---------------|------------|
+| Start | `start` | Unit is dead/failed/inactive/exited |
+| Stop | `stop` | Unit is running/active/listening/waiting |
+| Restart | `restart` | Unit is running/active/listening/waiting |
+| Reload | `reload` | Unit is running/active/listening/waiting |
+| Enable | `enable` | File state is disabled |
+| Disable | `disable` | File state is enabled |
+| Daemon Reload | `daemon-reload` | Always (global operation) |
+
+**UX flow:**
+- Press `x` on a selected unit → action picker modal shows context-sensitive actions
+- Select action with j/k + Enter → confirmation dialog (Y/N)
+- On success: auto-refresh unit list, show green status message in header
+- On failure: show error message (e.g., permission denied)
+- `R` shortcut for daemon-reload confirmation directly
+- User/system scope respected (`--user` flag)
+
+---
+
 ## Out of Scope
 
 These features are excluded from systemdmgr's scope.
 
 ### Write/Mutating Operations
 
-- Start, stop, restart, reload services
-- Enable, disable, mask, unmask services
+- Mask, unmask services
 - Create new timer or service units
 - Edit unit files
-- `systemctl daemon-reload`
 - PolicyKit / privilege escalation
 
 ### Non-Unit-Management Features
