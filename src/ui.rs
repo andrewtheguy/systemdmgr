@@ -235,13 +235,26 @@ pub fn render(frame: &mut Frame, app: &mut App) {
                 )
                 && prev != cur
             {
+                let content_width = logs_area.width.saturating_sub(2) as usize;
                 let short_id = &cur[..cur.len().min(12)];
-                log_lines.push(Line::from(Span::styled(
-                    format!("-- Boot {} --", short_id),
-                    Style::default()
-                        .fg(Color::DarkGray)
-                        .add_modifier(Modifier::ITALIC),
-                )));
+                let boot_ts = entry
+                    .timestamp
+                    .map(|ts| format!(" · {}", format_log_timestamp(ts)))
+                    .unwrap_or_default();
+                let label = format!(" Reboot {} {} ", short_id, boot_ts);
+                let pad_total = content_width.saturating_sub(label.len());
+                let pad_left = pad_total / 2;
+                let pad_right = pad_total - pad_left;
+                let separator = format!(
+                    "{}{}{}",
+                    "─".repeat(pad_left),
+                    label,
+                    "─".repeat(pad_right),
+                );
+                let style = Style::default()
+                    .fg(Color::Yellow)
+                    .add_modifier(Modifier::BOLD);
+                log_lines.push(Line::from(Span::styled(separator, style)));
                 if log_lines.len() >= visible_lines {
                     break;
                 }
