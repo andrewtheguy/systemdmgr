@@ -47,8 +47,7 @@ fn main() -> io::Result<()> {
             if key.code == KeyCode::Char('?')
                 && !app.show_status_picker && !app.show_type_picker
                 && !app.show_priority_picker && !app.show_time_picker
-                && !app.show_details && !app.show_file_state_picker
-                && !app.show_action_picker && !app.show_confirm
+                && !app.show_file_state_picker && !app.show_confirm
             {
                 app.toggle_help();
                 continue;

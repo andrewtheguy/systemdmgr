@@ -513,66 +513,95 @@ fn render_help(frame: &mut Frame, app: &App) {
         .fg(Color::Yellow)
         .add_modifier(Modifier::BOLD);
 
-    let mut help_text = vec![
-        Line::from(vec![Span::styled("Navigation", section_style)]),
-        Line::from("  j / Down      Move down"),
-        Line::from("  k / Up        Move up"),
-        Line::from("  g / Home      Go to top"),
-        Line::from("  G / End       Go to bottom"),
-        Line::from(""),
-        Line::from(vec![Span::styled("Search & Filter", section_style)]),
-        Line::from("  /             Start search"),
-        Line::from("  s             Open status filter"),
-        Line::from("  f             Open file state filter"),
-        Line::from("  t             Open unit type picker"),
-        Line::from("  p             Log priority filter"),
-        Line::from("  T             Log time range filter"),
-        Line::from("  Esc           Clear search/filter"),
-        Line::from(""),
-        Line::from(vec![Span::styled("Unit Details", section_style)]),
-        Line::from("  i / Enter     Open details modal"),
-        Line::from("  j/k           Scroll details"),
-        Line::from("  g/G           Top/Bottom of details"),
-        Line::from("  Esc/i/Enter   Close details"),
-        Line::from(""),
-        Line::from(vec![Span::styled("Unit Actions", section_style)]),
-        Line::from("  x             Open action picker"),
-        Line::from("  R             Daemon reload (direct)"),
-        Line::from(""),
-        Line::from(vec![Span::styled("Logs Panel", section_style)]),
-        Line::from("  l             Toggle logs panel"),
-        Line::from("  PgUp/PgDn     Scroll list/logs"),
-        Line::from("  Ctrl+u/d      Scroll logs half page"),
-        Line::from(""),
-    ];
+    let mut help_text: Vec<Line> = Vec::new();
+    let title;
 
-    if app.show_logs {
+    if app.show_action_picker {
+        title = "Help: Actions";
         help_text.extend(vec![
-            Line::from(vec![Span::styled("Log Focus Mode", section_style)]),
-            Line::from("  j/k / Up/Down Scroll logs"),
-            Line::from("  g / Home      Go to top of logs"),
-            Line::from("  G / End       Go to bottom of logs"),
-            Line::from("  /             Search within logs"),
-            Line::from("  n / N         Next/Prev search match"),
-            Line::from("  p             Log priority filter"),
-            Line::from("  T             Log time range filter"),
-            Line::from("  l             Exit log mode"),
-            Line::from("  Esc           Clear log search"),
+            Line::from(vec![Span::styled("Navigation", section_style)]),
+            Line::from("  j / Down      Move down"),
+            Line::from("  k / Up        Move up"),
+            Line::from("  Enter         Select action"),
             Line::from(""),
+            Line::from(vec![Span::styled("General", section_style)]),
+            Line::from("  Esc / x       Close"),
+            Line::from("  ?             Toggle this help"),
+        ]);
+    } else if app.show_details {
+        title = "Help: Details";
+        help_text.extend(vec![
+            Line::from(vec![Span::styled("Navigation", section_style)]),
+            Line::from("  j / Down      Scroll down"),
+            Line::from("  k / Up        Scroll up"),
+            Line::from("  g / Home      Go to top"),
+            Line::from("  G / End       Go to bottom"),
+            Line::from("  PgUp / PgDn   Page scroll"),
+            Line::from(""),
+            Line::from(vec![Span::styled("General", section_style)]),
+            Line::from("  Esc / i       Close details"),
+            Line::from("  Enter         Close details"),
+            Line::from("  ?             Toggle this help"),
+        ]);
+    } else if app.show_logs {
+        title = "Help: Logs";
+        help_text.extend(vec![
+            Line::from(vec![Span::styled("Navigation", section_style)]),
+            Line::from("  j / Down      Scroll down"),
+            Line::from("  k / Up        Scroll up"),
+            Line::from("  g / Home      Go to top"),
+            Line::from("  G / End       Go to bottom"),
+            Line::from("  PgUp / PgDn   Page scroll"),
+            Line::from("  Ctrl+u / d    Half page scroll"),
+            Line::from(""),
+            Line::from(vec![Span::styled("Search", section_style)]),
+            Line::from("  /             Search logs"),
+            Line::from("  n             Next match"),
+            Line::from("  N             Previous match"),
+            Line::from(""),
+            Line::from(vec![Span::styled("Filters", section_style)]),
+            Line::from("  p             Priority filter"),
+            Line::from("  T             Time range filter"),
+            Line::from(""),
+            Line::from(vec![Span::styled("General", section_style)]),
+            Line::from("  l             Exit logs"),
+            Line::from("  Esc           Clear search / Exit logs"),
+            Line::from("  ?             Toggle this help"),
+        ]);
+    } else {
+        title = "Help: Unit List";
+        help_text.extend(vec![
+            Line::from(vec![Span::styled("Navigation", section_style)]),
+            Line::from("  j / Down      Move down"),
+            Line::from("  k / Up        Move up"),
+            Line::from("  g / Home      Go to top"),
+            Line::from("  G / End       Go to bottom"),
+            Line::from("  PgUp / PgDn   Page up/down"),
+            Line::from(""),
+            Line::from(vec![Span::styled("Search & Filter", section_style)]),
+            Line::from("  /             Search units"),
+            Line::from("  s             Status filter"),
+            Line::from("  f             File state filter"),
+            Line::from("  t             Unit type picker"),
+            Line::from("  Esc           Clear search"),
+            Line::from(""),
+            Line::from(vec![Span::styled("Unit Operations", section_style)]),
+            Line::from("  i / Enter     Open details"),
+            Line::from("  x             Action picker"),
+            Line::from("  R             Daemon reload"),
+            Line::from("  l             Open logs"),
+            Line::from(""),
+            Line::from(vec![Span::styled("Mouse", section_style)]),
+            Line::from("  Click         Select unit"),
+            Line::from("  Scroll        Navigate list"),
+            Line::from(""),
+            Line::from(vec![Span::styled("General", section_style)]),
+            Line::from("  r             Refresh units"),
+            Line::from("  u             Toggle user/system"),
+            Line::from("  ?             Toggle this help"),
+            Line::from("  q             Quit"),
         ]);
     }
-
-    help_text.extend(vec![
-        Line::from(vec![Span::styled("Mouse", section_style)]),
-        Line::from("  Click         Select service"),
-        Line::from("  Scroll        Navigate list/logs"),
-        Line::from(""),
-        Line::from(vec![Span::styled("Other", section_style)]),
-        Line::from("  r             Refresh services"),
-        Line::from("  u             Toggle user/system"),
-        Line::from("  ?             Toggle this help"),
-        Line::from("  q / Esc       Quit"),
-    ]);
 
     let area = centered_rect(50, 70, frame.area());
 
@@ -581,7 +610,7 @@ fn render_help(frame: &mut Frame, app: &App) {
         .block(
             Block::default()
                 .borders(Borders::ALL)
-                .title("Help")
+                .title(title)
                 .style(Style::default().bg(Color::Black)),
         );
 
