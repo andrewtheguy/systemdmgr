@@ -262,7 +262,7 @@ pub struct UnitProperties {
     pub timers_monotonic: Vec<String>,
     pub last_trigger_usec: String,
     pub result: String,
-    pub next_elapse_realtime: Option<u64>,
+    pub next_elapse_realtime: String,
     pub persistent: String,
     pub accuracy_usec: String,
     pub randomized_delay_usec: String,
@@ -654,12 +654,7 @@ pub fn fetch_unit_properties(unit_name: &str, user_mode: bool) -> UnitProperties
         timers_monotonic: parse_timer_specs(&get("TimersMonotonic")),
         last_trigger_usec: get("LastTriggerUSec"),
         result: get("Result"),
-        next_elapse_realtime: map
-            .get("NextElapseUSecRealtime")
-            .unwrap_or(&"0")
-            .parse::<u64>()
-            .ok()
-            .filter(|&v| v != 0),
+        next_elapse_realtime: get("NextElapseUSecRealtime"),
         persistent: get("Persistent"),
         accuracy_usec: get("AccuracyUSec"),
         randomized_delay_usec: get("RandomizedDelayUSec"),
@@ -1384,7 +1379,7 @@ mod tests {
         assert!(props.timers_monotonic.is_empty());
         assert_eq!(props.last_trigger_usec, "");
         assert_eq!(props.result, "");
-        assert_eq!(props.next_elapse_realtime, None);
+        assert_eq!(props.next_elapse_realtime, "");
         assert_eq!(props.persistent, "");
         assert_eq!(props.accuracy_usec, "");
         assert_eq!(props.randomized_delay_usec, "");

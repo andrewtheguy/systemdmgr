@@ -8,7 +8,7 @@ use ratatui::{
 
 use crate::app::App;
 use crate::service::{
-    format_bytes, format_cpu_time, format_log_timestamp, format_relative_time, priority_label,
+    format_bytes, format_cpu_time, format_log_timestamp, priority_label,
     LogEntry, TimeRange, UnitAction, FILE_STATE_OPTIONS, PRIORITY_LABELS, TIME_RANGES, UNIT_TYPES,
 };
 
@@ -1043,7 +1043,7 @@ fn render_details_modal(frame: &mut Frame, app: &mut App) {
     if unit_name.ends_with(".timer") {
         let has_timer_data = !props.timers_calendar.is_empty()
             || !props.timers_monotonic.is_empty()
-            || props.next_elapse_realtime.is_some()
+            || !props.next_elapse_realtime.is_empty()
             || (!props.last_trigger_usec.is_empty() && props.last_trigger_usec != "n/a");
 
         if has_timer_data {
@@ -1060,10 +1060,10 @@ fn render_details_modal(frame: &mut Frame, app: &mut App) {
                     Span::styled(spec.clone(), value_style),
                 ]));
             }
-            if let Some(next_usec) = props.next_elapse_realtime {
+            if !props.next_elapse_realtime.is_empty() {
                 lines.push(Line::from(vec![
                     Span::styled("  Next Trigger:   ", label_style),
-                    Span::styled(format_relative_time(next_usec), value_style),
+                    Span::styled(props.next_elapse_realtime.clone(), value_style),
                 ]));
             }
             if !props.last_trigger_usec.is_empty() && props.last_trigger_usec != "n/a" {
