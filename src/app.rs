@@ -86,7 +86,11 @@ impl App {
             log_search_mode: false,
             log_search_matches: Vec::new(),
             log_search_match_index: None,
-            user_mode: false,
+            user_mode: std::process::Command::new("id")
+                .arg("-u")
+                .output()
+                .map(|o| String::from_utf8_lossy(&o.stdout).trim() != "0")
+                .unwrap_or(false),
             unit_type: UnitType::Service,
             show_type_picker: false,
             type_picker_state: ListState::default(),
