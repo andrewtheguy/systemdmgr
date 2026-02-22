@@ -3,6 +3,7 @@ mod service;
 mod ui;
 
 use std::io::{self, stdout};
+use std::time::Duration;
 
 use crossterm::{
     event::{
@@ -27,6 +28,18 @@ fn main() -> io::Result<()> {
 
     loop {
         terminal.draw(|frame| ui::render(frame, &mut app))?;
+
+        app.check_action_progress();
+
+        let poll_timeout = if app.action_in_progress {
+            Duration::from_millis(100)
+        } else {
+            Duration::from_secs(60)
+        };
+
+        if !event::poll(poll_timeout)? {
+            continue;
+        }
 
         match event::read()? {
             Event::Key(key) if key.kind == KeyEventKind::Press => {
@@ -121,7 +134,9 @@ fn main() -> io::Result<()> {
 
             // Confirmation dialog modal
             if app.show_confirm {
-                if app.action_result.is_some() {
+                if app.action_in_progress {
+                    // Ignore input while action is executing
+                } else if app.action_result.is_some() {
                     // Result showing — any key dismisses
                     app.dismiss_action_result();
                 } else {

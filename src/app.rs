@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::sync::mpsc;
 
 use ratatui::widgets::ListState;
 
@@ -57,7 +58,9 @@ pub struct App {
     pub show_confirm: bool,
     pub confirm_action: Option<UnitAction>,
     pub confirm_unit_name: Option<String>,
+    pub action_in_progress: bool,
     pub action_result: Option<Result<String, String>>,
+    pub action_receiver: Option<mpsc::Receiver<Result<String, String>>>,
     pub status_message: Option<String>,
 }
 
@@ -109,7 +112,9 @@ impl App {
             show_confirm: false,
             confirm_action: None,
             confirm_unit_name: None,
+            action_in_progress: false,
             action_result: None,
+            action_receiver: None,
             status_message: None,
         };
         app.load_services();
@@ -699,8 +704,24 @@ impl App {
         if let (Some(action), Some(unit_name)) = (self.confirm_action, &self.confirm_unit_name)
         {
             let unit_name = unit_name.clone();
-            let result = execute_unit_action(action, &unit_name, self.user_mode);
+            let user_mode = self.user_mode;
+            let (tx, rx) = mpsc::channel();
+            self.action_in_progress = true;
+            self.action_receiver = Some(rx);
+            std::thread::spawn(move || {
+                let result = execute_unit_action(action, &unit_name, user_mode);
+                let _ = tx.send(result);
+            });
+        }
+    }
+
+    pub fn check_action_progress(&mut self) {
+        if let Some(ref rx) = self.action_receiver
+            && let Ok(result) = rx.try_recv()
+        {
+            self.action_in_progress = false;
             self.action_result = Some(result);
+            self.action_receiver = None;
             self.load_services();
             if self.show_logs {
                 self.mark_logs_dirty();
@@ -712,14 +733,18 @@ impl App {
         self.show_confirm = false;
         self.confirm_action = None;
         self.confirm_unit_name = None;
+        self.action_in_progress = false;
         self.action_result = None;
+        self.action_receiver = None;
     }
 
     pub fn dismiss_action_result(&mut self) {
         self.show_confirm = false;
         self.confirm_action = None;
         self.confirm_unit_name = None;
+        self.action_in_progress = false;
         self.action_result = None;
+        self.action_receiver = None;
     }
 
     pub fn clear_status_message(&mut self) {
@@ -802,7 +827,9 @@ mod tests {
             show_confirm: false,
             confirm_action: None,
             confirm_unit_name: None,
+            action_in_progress: false,
             action_result: None,
+            action_receiver: None,
             status_message: None,
         };
         if !app.filtered_indices.is_empty() {

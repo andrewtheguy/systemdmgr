@@ -167,6 +167,18 @@ impl UnitAction {
         }
     }
 
+    pub fn progress_label(&self) -> &'static str {
+        match self {
+            UnitAction::Start => "Starting...",
+            UnitAction::Stop => "Stopping...",
+            UnitAction::Restart => "Restarting...",
+            UnitAction::Reload => "Reloading...",
+            UnitAction::Enable => "Enabling...",
+            UnitAction::Disable => "Disabling...",
+            UnitAction::DaemonReload => "Reloading daemon...",
+        }
+    }
+
     pub fn confirmation_message(&self, unit_name: &str) -> String {
         match self {
             UnitAction::DaemonReload => "Reload systemd daemon configuration?".to_string(),

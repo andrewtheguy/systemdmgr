@@ -884,6 +884,20 @@ fn render_confirm_dialog(frame: &mut Frame, app: &App) {
             "Action Failed"
         };
         (text, title)
+    } else if app.action_in_progress {
+        // Show progress
+        let text = vec![
+            Line::from(""),
+            Line::from(vec![Span::styled(
+                action.progress_label().to_string(),
+                Style::default()
+                    .fg(Color::Cyan)
+                    .add_modifier(Modifier::BOLD),
+            )]),
+            Line::from(""),
+            Line::from(""),
+        ];
+        (text, "Executing")
     } else {
         // Show confirmation prompt
         let message = action.confirmation_message(unit_name);
