@@ -1,6 +1,8 @@
-name: Release (Manual)
+name: Release
 
 on:
+  release:
+    types: [created]
   workflow_dispatch:
     inputs:
       tag_name:
@@ -12,27 +14,41 @@ permissions:
 
 jobs:
   setup:
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      startsWith(github.event.release.tag_name, 'v')
     runs-on: ubuntu-latest
     outputs:
       release_tag: ${{ steps.tag.outputs.release_tag }}
       is_prerelease: ${{ steps.tag.outputs.is_prerelease }}
+      existing_release: ${{ steps.tag.outputs.existing_release }}
     steps:
-      - name: Generate Tag
+      - name: Determine Tag
         id: tag
         env:
           TAG: ${{ inputs.tag_name }}
           REF_NAME: ${{ github.ref_name }}
+          EVENT_NAME: ${{ github.event_name }}
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+          RELEASE_PRERELEASE: ${{ github.event.release.prerelease }}
         run: |
-          if [ -z "$TAG" ]; then
+          if [ "$EVENT_NAME" = "release" ]; then
+            echo "release_tag=$RELEASE_TAG" >> "$GITHUB_OUTPUT"
+            echo "is_prerelease=$RELEASE_PRERELEASE" >> "$GITHUB_OUTPUT"
+            echo "existing_release=true" >> "$GITHUB_OUTPUT"
+          elif [ -z "$TAG" ]; then
             echo "release_tag=$(date +'%Y%m%d%H%M%S')" >> "$GITHUB_OUTPUT"
             echo "is_prerelease=true" >> "$GITHUB_OUTPUT"
+            echo "existing_release=false" >> "$GITHUB_OUTPUT"
           elif [ "$REF_NAME" != "main" ]; then
             # Non-main branches always produce prereleases
             echo "release_tag=$TAG" >> "$GITHUB_OUTPUT"
             echo "is_prerelease=true" >> "$GITHUB_OUTPUT"
+            echo "existing_release=false" >> "$GITHUB_OUTPUT"
           else
             echo "release_tag=$TAG" >> "$GITHUB_OUTPUT"
             echo "is_prerelease=false" >> "$GITHUB_OUTPUT"
+            echo "existing_release=false" >> "$GITHUB_OUTPUT"
           fi
 
   build-linux:
@@ -69,7 +85,7 @@ jobs:
           name: release-${{ matrix.suffix }}
           path: target/release/systemdmgr-${{ matrix.suffix }}
 
-  create-release:
+  upload-release:
     needs: [setup, build-linux]
     runs-on: ubuntu-latest
     steps:
@@ -83,7 +99,17 @@ jobs:
       - name: List artifacts
         run: ls -la artifacts/
 
-      - name: Create Release
+      - name: Upload to existing release
+        if: needs.setup.outputs.existing_release == 'true'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ needs.setup.outputs.release_tag }}
+          files: artifacts/*
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Create new release
+        if: needs.setup.outputs.existing_release != 'true'
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ needs.setup.outputs.release_tag }}
