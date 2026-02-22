@@ -61,6 +61,7 @@ pub struct LogEntry {
     pub pid: Option<String>,
     pub identifier: Option<String>,
     pub message: String,
+    pub boot_id: Option<String>,
 }
 
 pub const PRIORITY_LABELS: [&str; 8] = [
@@ -327,6 +328,7 @@ fn parse_journal_json_line(line: &str) -> LogEntry {
             pid: None,
             identifier: None,
             message: line.to_string(),
+            boot_id: None,
         };
     };
 
@@ -354,12 +356,15 @@ fn parse_journal_json_line(line: &str) -> LogEntry {
 
     let identifier = val["SYSLOG_IDENTIFIER"].as_str().map(|s| s.to_string());
 
+    let boot_id = val["_BOOT_ID"].as_str().map(|s| s.to_string());
+
     LogEntry {
         timestamp,
         priority,
         pid,
         identifier,
         message,
+        boot_id,
     }
 }
 
@@ -1034,6 +1039,20 @@ mod tests {
         let line = r#"{"MESSAGE":"test","__REALTIME_TIMESTAMP":"not_a_number"}"#;
         let entry = parse_journal_json_line(line);
         assert_eq!(entry.timestamp, None);
+    }
+
+    #[test]
+    fn test_parse_boot_id() {
+        let line = r#"{"MESSAGE":"hello","_BOOT_ID":"abcdef123456"}"#;
+        let entry = parse_journal_json_line(line);
+        assert_eq!(entry.boot_id.as_deref(), Some("abcdef123456"));
+    }
+
+    #[test]
+    fn test_parse_boot_id_missing() {
+        let line = r#"{"MESSAGE":"hello"}"#;
+        let entry = parse_journal_json_line(line);
+        assert_eq!(entry.boot_id, None);
     }
 
     // Phase 3 — format_log_timestamp

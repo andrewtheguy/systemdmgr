@@ -220,21 +220,41 @@ pub fn render(frame: &mut Frame, app: &mut App) {
         // Calculate visible area (subtract 2 for borders)
         let visible_lines = logs_area.height.saturating_sub(2) as usize;
 
-        // Create log content with scroll and search highlighting
-        let log_lines: Vec<Line> = app
-            .logs
-            .iter()
-            .enumerate()
-            .skip(app.logs_scroll)
-            .take(visible_lines)
-            .map(|(line_idx, entry)| render_log_entry(entry, line_idx, app))
-            .collect();
+        // Create log content with scroll, search highlighting, and boot separators
+        let mut log_lines: Vec<Line> = Vec::new();
+        let mut entries_shown = 0;
+        for (entry_idx, entry) in app.logs.iter().enumerate().skip(app.logs_scroll) {
+            if log_lines.len() >= visible_lines {
+                break;
+            }
+            // Boot boundary separator
+            if entry_idx > 0
+                && let (Some(prev), Some(cur)) = (
+                    &app.logs[entry_idx - 1].boot_id,
+                    &entry.boot_id,
+                )
+                && prev != cur
+            {
+                let short_id = &cur[..cur.len().min(12)];
+                log_lines.push(Line::from(Span::styled(
+                    format!("-- Boot {} --", short_id),
+                    Style::default()
+                        .fg(Color::DarkGray)
+                        .add_modifier(Modifier::ITALIC),
+                )));
+                if log_lines.len() >= visible_lines {
+                    break;
+                }
+            }
+            log_lines.push(render_log_entry(entry, entry_idx, app));
+            entries_shown += 1;
+        }
 
         let scroll_info = if !app.logs.is_empty() {
             format!(
                 " [{}-{}/{}]",
                 app.logs_scroll + 1,
-                (app.logs_scroll + visible_lines).min(app.logs.len()),
+                app.logs_scroll + entries_shown,
                 app.logs.len()
             )
         } else {

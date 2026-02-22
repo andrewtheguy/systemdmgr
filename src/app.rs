@@ -432,6 +432,7 @@ impl App {
                             pid: None,
                             identifier: None,
                             message: format!("Error fetching logs: {}", e),
+                            boot_id: None,
                         }];
                     }
                 }
@@ -776,6 +777,7 @@ mod tests {
             pid: None,
             identifier: None,
             message: message.into(),
+            boot_id: None,
         }
     }
 
