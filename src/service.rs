@@ -537,3 +537,500 @@ pub fn format_cpu_time(nsec: u64) -> String {
         format!("{:.3}s", secs)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn make_unit(sub: &str) -> SystemdUnit {
+        SystemdUnit {
+            unit: "test.service".into(),
+            load: "loaded".into(),
+            active: "active".into(),
+            sub: sub.into(),
+            description: "Test".into(),
+            detail: None,
+            file_state: None,
+        }
+    }
+
+    // Phase 2 — UnitType::label
+
+    #[test]
+    fn test_unit_type_label_service() {
+        assert_eq!(UnitType::Service.label(), "Services");
+    }
+
+    #[test]
+    fn test_unit_type_label_timer() {
+        assert_eq!(UnitType::Timer.label(), "Timers");
+    }
+
+    #[test]
+    fn test_unit_type_label_socket() {
+        assert_eq!(UnitType::Socket.label(), "Sockets");
+    }
+
+    #[test]
+    fn test_unit_type_label_target() {
+        assert_eq!(UnitType::Target.label(), "Targets");
+    }
+
+    #[test]
+    fn test_unit_type_label_path() {
+        assert_eq!(UnitType::Path.label(), "Paths");
+    }
+
+    // Phase 2 — UnitType::systemctl_type
+
+    #[test]
+    fn test_unit_type_systemctl_type_service() {
+        assert_eq!(UnitType::Service.systemctl_type(), "service");
+    }
+
+    #[test]
+    fn test_unit_type_systemctl_type_timer() {
+        assert_eq!(UnitType::Timer.systemctl_type(), "timer");
+    }
+
+    #[test]
+    fn test_unit_type_systemctl_type_socket() {
+        assert_eq!(UnitType::Socket.systemctl_type(), "socket");
+    }
+
+    #[test]
+    fn test_unit_type_systemctl_type_target() {
+        assert_eq!(UnitType::Target.systemctl_type(), "target");
+    }
+
+    #[test]
+    fn test_unit_type_systemctl_type_path() {
+        assert_eq!(UnitType::Path.systemctl_type(), "path");
+    }
+
+    // Phase 2 — status_options
+
+    #[test]
+    fn test_status_options_service() {
+        assert_eq!(
+            UnitType::Service.status_options(),
+            &["All", "running", "exited", "failed", "dead"]
+        );
+    }
+
+    #[test]
+    fn test_status_options_timer() {
+        assert_eq!(
+            UnitType::Timer.status_options(),
+            &["All", "waiting", "running", "elapsed"]
+        );
+    }
+
+    #[test]
+    fn test_status_options_socket() {
+        assert_eq!(
+            UnitType::Socket.status_options(),
+            &["All", "listening", "running", "failed"]
+        );
+    }
+
+    #[test]
+    fn test_status_options_target() {
+        assert_eq!(
+            UnitType::Target.status_options(),
+            &["All", "active", "inactive"]
+        );
+    }
+
+    #[test]
+    fn test_status_options_path() {
+        assert_eq!(
+            UnitType::Path.status_options(),
+            &["All", "waiting", "running", "failed"]
+        );
+    }
+
+    #[test]
+    fn test_status_options_all_start_with_all() {
+        for ut in &UNIT_TYPES {
+            assert_eq!(
+                ut.status_options()[0],
+                "All",
+                "{:?} status_options should start with All",
+                ut
+            );
+        }
+    }
+
+    #[test]
+    fn test_unit_types_count() {
+        assert_eq!(UNIT_TYPES.len(), 5);
+    }
+
+    // Phase 1 — SystemdUnit methods
+
+    #[test]
+    fn test_status_display_returns_sub() {
+        let unit = make_unit("running");
+        assert_eq!(unit.status_display(), "running");
+    }
+
+    #[test]
+    fn test_status_color_running() {
+        assert_eq!(make_unit("running").status_color(), Color::Green);
+    }
+
+    #[test]
+    fn test_status_color_exited() {
+        assert_eq!(make_unit("exited").status_color(), Color::Yellow);
+    }
+
+    #[test]
+    fn test_status_color_dead() {
+        assert_eq!(make_unit("dead").status_color(), Color::DarkGray);
+    }
+
+    #[test]
+    fn test_status_color_stopped() {
+        assert_eq!(make_unit("stopped").status_color(), Color::DarkGray);
+    }
+
+    #[test]
+    fn test_status_color_failed() {
+        assert_eq!(make_unit("failed").status_color(), Color::Red);
+    }
+
+    #[test]
+    fn test_status_color_waiting() {
+        assert_eq!(make_unit("waiting").status_color(), Color::Cyan);
+    }
+
+    #[test]
+    fn test_status_color_listening() {
+        assert_eq!(make_unit("listening").status_color(), Color::Green);
+    }
+
+    #[test]
+    fn test_status_color_active() {
+        assert_eq!(make_unit("active").status_color(), Color::Green);
+    }
+
+    #[test]
+    fn test_status_color_inactive() {
+        assert_eq!(make_unit("inactive").status_color(), Color::DarkGray);
+    }
+
+    #[test]
+    fn test_status_color_elapsed() {
+        assert_eq!(make_unit("elapsed").status_color(), Color::Yellow);
+    }
+
+    #[test]
+    fn test_status_color_unknown() {
+        assert_eq!(make_unit("something_else").status_color(), Color::White);
+    }
+
+    // Phase 3 — priority_label
+
+    #[test]
+    fn test_priority_label_0() {
+        assert_eq!(priority_label(0), "emerg");
+    }
+
+    #[test]
+    fn test_priority_label_1() {
+        assert_eq!(priority_label(1), "alert");
+    }
+
+    #[test]
+    fn test_priority_label_2() {
+        assert_eq!(priority_label(2), "crit");
+    }
+
+    #[test]
+    fn test_priority_label_3() {
+        assert_eq!(priority_label(3), "err");
+    }
+
+    #[test]
+    fn test_priority_label_4() {
+        assert_eq!(priority_label(4), "warning");
+    }
+
+    #[test]
+    fn test_priority_label_5() {
+        assert_eq!(priority_label(5), "notice");
+    }
+
+    #[test]
+    fn test_priority_label_6() {
+        assert_eq!(priority_label(6), "info");
+    }
+
+    #[test]
+    fn test_priority_label_7() {
+        assert_eq!(priority_label(7), "debug");
+    }
+
+    #[test]
+    fn test_priority_label_8() {
+        assert_eq!(priority_label(8), "unknown");
+    }
+
+    #[test]
+    fn test_priority_label_255() {
+        assert_eq!(priority_label(255), "unknown");
+    }
+
+    #[test]
+    fn test_priority_labels_count() {
+        assert_eq!(PRIORITY_LABELS.len(), 8);
+    }
+
+    // Phase 3 — TimeRange
+
+    #[test]
+    fn test_time_range_label_all() {
+        assert_eq!(TimeRange::All.label(), "All");
+    }
+
+    #[test]
+    fn test_time_range_label_fifteen_minutes() {
+        assert_eq!(TimeRange::FifteenMinutes.label(), "Last 15 minutes");
+    }
+
+    #[test]
+    fn test_time_range_label_one_hour() {
+        assert_eq!(TimeRange::OneHour.label(), "Last 1 hour");
+    }
+
+    #[test]
+    fn test_time_range_label_one_day() {
+        assert_eq!(TimeRange::OneDay.label(), "Last 24 hours");
+    }
+
+    #[test]
+    fn test_time_range_label_seven_days() {
+        assert_eq!(TimeRange::SevenDays.label(), "Last 7 days");
+    }
+
+    #[test]
+    fn test_time_range_label_today() {
+        assert_eq!(TimeRange::Today.label(), "Today");
+    }
+
+    #[test]
+    fn test_time_range_since_all() {
+        assert_eq!(TimeRange::All.journalctl_since(), None);
+    }
+
+    #[test]
+    fn test_time_range_since_fifteen_minutes() {
+        assert_eq!(
+            TimeRange::FifteenMinutes.journalctl_since(),
+            Some("15 min ago")
+        );
+    }
+
+    #[test]
+    fn test_time_range_since_one_hour() {
+        assert_eq!(TimeRange::OneHour.journalctl_since(), Some("1 hour ago"));
+    }
+
+    #[test]
+    fn test_time_range_since_one_day() {
+        assert_eq!(TimeRange::OneDay.journalctl_since(), Some("1 day ago"));
+    }
+
+    #[test]
+    fn test_time_range_since_seven_days() {
+        assert_eq!(
+            TimeRange::SevenDays.journalctl_since(),
+            Some("7 days ago")
+        );
+    }
+
+    #[test]
+    fn test_time_range_since_today() {
+        assert_eq!(TimeRange::Today.journalctl_since(), Some("today"));
+    }
+
+    #[test]
+    fn test_time_ranges_count() {
+        assert_eq!(TIME_RANGES.len(), 6);
+    }
+
+    // Phase 3 — parse_journal_json_line
+
+    #[test]
+    fn test_parse_complete() {
+        let line = r#"{"MESSAGE":"hello world","PRIORITY":"3","__REALTIME_TIMESTAMP":"1700000000000000","_PID":"1234","SYSLOG_IDENTIFIER":"myapp"}"#;
+        let entry = parse_journal_json_line(line);
+        assert_eq!(entry.message, "hello world");
+        assert_eq!(entry.priority, Some(3));
+        assert_eq!(entry.timestamp, Some(1700000000000000));
+        assert_eq!(entry.pid.as_deref(), Some("1234"));
+        assert_eq!(entry.identifier.as_deref(), Some("myapp"));
+    }
+
+    #[test]
+    fn test_parse_missing_optional_fields() {
+        let line = r#"{"MESSAGE":"only message"}"#;
+        let entry = parse_journal_json_line(line);
+        assert_eq!(entry.message, "only message");
+        assert_eq!(entry.priority, None);
+        assert_eq!(entry.timestamp, None);
+        assert_eq!(entry.pid, None);
+        assert_eq!(entry.identifier, None);
+    }
+
+    #[test]
+    fn test_parse_byte_array_message() {
+        let line = r#"{"MESSAGE":[104,101,108,108,111]}"#;
+        let entry = parse_journal_json_line(line);
+        assert_eq!(entry.message, "hello");
+    }
+
+    #[test]
+    fn test_parse_non_string_non_array_message() {
+        let line = r#"{"MESSAGE":42}"#;
+        let entry = parse_journal_json_line(line);
+        assert_eq!(entry.message, line);
+    }
+
+    #[test]
+    fn test_parse_invalid_json() {
+        let line = "not json at all";
+        let entry = parse_journal_json_line(line);
+        assert_eq!(entry.message, "not json at all");
+        assert_eq!(entry.priority, None);
+        assert_eq!(entry.timestamp, None);
+        assert_eq!(entry.pid, None);
+        assert_eq!(entry.identifier, None);
+    }
+
+    #[test]
+    fn test_parse_empty_string() {
+        let entry = parse_journal_json_line("");
+        assert_eq!(entry.message, "");
+    }
+
+    #[test]
+    fn test_parse_priority_non_numeric() {
+        let line = r#"{"MESSAGE":"test","PRIORITY":"abc"}"#;
+        let entry = parse_journal_json_line(line);
+        assert_eq!(entry.priority, None);
+    }
+
+    #[test]
+    fn test_parse_timestamp_non_numeric() {
+        let line = r#"{"MESSAGE":"test","__REALTIME_TIMESTAMP":"not_a_number"}"#;
+        let entry = parse_journal_json_line(line);
+        assert_eq!(entry.timestamp, None);
+    }
+
+    // Phase 3 — format_log_timestamp
+
+    #[test]
+    fn test_format_log_timestamp_valid() {
+        let ts = 1700000000000000_i64; // 2023-11-14
+        let result = format_log_timestamp(ts);
+        assert!(!result.is_empty());
+        // Format is "Mon DD HH:MM:SS" → 15 chars
+        assert_eq!(result.len(), 15);
+    }
+
+    #[test]
+    fn test_format_log_timestamp_zero() {
+        let result = format_log_timestamp(0);
+        assert!(!result.is_empty());
+    }
+
+    // Phase 4 — format_bytes
+
+    #[test]
+    fn test_format_bytes_zero() {
+        assert_eq!(format_bytes(0), "0 B");
+    }
+
+    #[test]
+    fn test_format_bytes_500() {
+        assert_eq!(format_bytes(500), "500 B");
+    }
+
+    #[test]
+    fn test_format_bytes_1024() {
+        assert_eq!(format_bytes(1024), "1.0 KB");
+    }
+
+    #[test]
+    fn test_format_bytes_1536() {
+        assert_eq!(format_bytes(1536), "1.5 KB");
+    }
+
+    #[test]
+    fn test_format_bytes_1mb() {
+        assert_eq!(format_bytes(1048576), "1.0 MB");
+    }
+
+    #[test]
+    fn test_format_bytes_1gb() {
+        assert_eq!(format_bytes(1073741824), "1.0 GB");
+    }
+
+    // Phase 4 — format_cpu_time
+
+    #[test]
+    fn test_format_cpu_time_zero() {
+        assert_eq!(format_cpu_time(0), "0.000s");
+    }
+
+    #[test]
+    fn test_format_cpu_time_500ms() {
+        assert_eq!(format_cpu_time(500_000_000), "0.500s");
+    }
+
+    #[test]
+    fn test_format_cpu_time_60s() {
+        assert_eq!(format_cpu_time(60_000_000_000), "1.0min");
+    }
+
+    #[test]
+    fn test_format_cpu_time_90s() {
+        assert_eq!(format_cpu_time(90_000_000_000), "1.5min");
+    }
+
+    // Phase 4 — FILE_STATE_OPTIONS
+
+    #[test]
+    fn test_file_state_options_contents() {
+        assert_eq!(
+            FILE_STATE_OPTIONS,
+            &["All", "enabled", "disabled", "static", "masked", "indirect"]
+        );
+    }
+
+    // Phase 4 — UnitProperties::default
+
+    #[test]
+    fn test_unit_properties_default() {
+        let props = UnitProperties::default();
+        assert_eq!(props.fragment_path, "");
+        assert_eq!(props.unit_file_state, "");
+        assert_eq!(props.active_state, "");
+        assert_eq!(props.sub_state, "");
+        assert_eq!(props.load_state, "");
+        assert_eq!(props.description, "");
+        assert_eq!(props.main_pid, 0);
+        assert_eq!(props.exec_main_start_timestamp, "");
+        assert_eq!(props.memory_current, None);
+        assert_eq!(props.cpu_usage_nsec, None);
+        assert!(props.requires.is_empty());
+        assert!(props.wants.is_empty());
+        assert!(props.after.is_empty());
+        assert!(props.before.is_empty());
+        assert!(props.conflicts.is_empty());
+        assert!(props.triggered_by.is_empty());
+        assert!(props.triggers.is_empty());
+    }
+}

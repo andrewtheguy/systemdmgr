@@ -960,3 +960,184 @@ fn render_dep_lines<'a>(
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // Phase 4 — file_state_color
+
+    #[test]
+    fn test_file_state_color_enabled() {
+        assert_eq!(file_state_color("enabled"), Color::Green);
+    }
+
+    #[test]
+    fn test_file_state_color_disabled() {
+        assert_eq!(file_state_color("disabled"), Color::Yellow);
+    }
+
+    #[test]
+    fn test_file_state_color_static() {
+        assert_eq!(file_state_color("static"), Color::DarkGray);
+    }
+
+    #[test]
+    fn test_file_state_color_masked() {
+        assert_eq!(file_state_color("masked"), Color::Red);
+    }
+
+    #[test]
+    fn test_file_state_color_indirect() {
+        assert_eq!(file_state_color("indirect"), Color::Cyan);
+    }
+
+    #[test]
+    fn test_file_state_color_unknown() {
+        assert_eq!(file_state_color("something"), Color::White);
+    }
+
+    // Phase 3 — priority_color
+
+    #[test]
+    fn test_priority_color_0() {
+        assert_eq!(priority_color(0), (Color::Red, true));
+    }
+
+    #[test]
+    fn test_priority_color_1() {
+        assert_eq!(priority_color(1), (Color::Red, true));
+    }
+
+    #[test]
+    fn test_priority_color_2() {
+        assert_eq!(priority_color(2), (Color::Red, true));
+    }
+
+    #[test]
+    fn test_priority_color_3() {
+        assert_eq!(priority_color(3), (Color::Red, false));
+    }
+
+    #[test]
+    fn test_priority_color_4() {
+        assert_eq!(priority_color(4), (Color::Yellow, false));
+    }
+
+    #[test]
+    fn test_priority_color_5() {
+        assert_eq!(priority_color(5), (Color::Cyan, false));
+    }
+
+    #[test]
+    fn test_priority_color_6() {
+        assert_eq!(priority_color(6), (Color::White, false));
+    }
+
+    #[test]
+    fn test_priority_color_7() {
+        assert_eq!(priority_color(7), (Color::DarkGray, false));
+    }
+
+    #[test]
+    fn test_priority_color_8() {
+        assert_eq!(priority_color(8), (Color::White, false));
+    }
+
+    #[test]
+    fn test_priority_color_255() {
+        assert_eq!(priority_color(255), (Color::White, false));
+    }
+
+    // Layout geometry — centered_fixed_rect
+
+    #[test]
+    fn test_centered_fixed_rect_centered() {
+        let area = Rect::new(0, 0, 100, 50);
+        let result = centered_fixed_rect(30, 10, area);
+        assert_eq!(result.x, 35);
+        assert_eq!(result.y, 20);
+        assert_eq!(result.width, 30);
+        assert_eq!(result.height, 10);
+    }
+
+    #[test]
+    fn test_centered_fixed_rect_larger_than_area() {
+        let area = Rect::new(0, 0, 20, 10);
+        let result = centered_fixed_rect(30, 15, area);
+        assert_eq!(result.width, 20);
+        assert_eq!(result.height, 10);
+    }
+
+    #[test]
+    fn test_centered_fixed_rect_with_offset() {
+        let area = Rect::new(10, 5, 100, 50);
+        let result = centered_fixed_rect(30, 10, area);
+        assert_eq!(result.x, 10 + (100 - 30) / 2);
+        assert_eq!(result.y, 5 + (50 - 10) / 2);
+        assert_eq!(result.width, 30);
+        assert_eq!(result.height, 10);
+    }
+
+    #[test]
+    fn test_centered_fixed_rect_exact_fit() {
+        let area = Rect::new(0, 0, 30, 10);
+        let result = centered_fixed_rect(30, 10, area);
+        assert_eq!(result.x, 0);
+        assert_eq!(result.y, 0);
+        assert_eq!(result.width, 30);
+        assert_eq!(result.height, 10);
+    }
+
+    // Layout geometry — centered_rect
+
+    #[test]
+    fn test_centered_rect_50_50() {
+        let area = Rect::new(0, 0, 100, 100);
+        let result = centered_rect(50, 50, area);
+        // The centered rect should be roughly 50% of the area
+        assert!(result.width > 0);
+        assert!(result.height > 0);
+        assert!(result.width <= 100);
+        assert!(result.height <= 100);
+        // Should be approximately centered
+        assert!(result.x > 0);
+        assert!(result.y > 0);
+    }
+
+    // Layout geometry — get_layout_regions
+
+    #[test]
+    fn test_layout_regions_no_logs() {
+        let area = Rect::new(0, 0, 100, 50);
+        let regions = get_layout_regions(area, false);
+        // Services list should take full width
+        assert_eq!(regions.services_list.width, 100);
+        assert!(regions.logs_panel.is_none());
+    }
+
+    #[test]
+    fn test_layout_regions_with_logs() {
+        let area = Rect::new(0, 0, 100, 50);
+        let regions = get_layout_regions(area, true);
+        // Services takes ~40%, logs ~60%
+        assert!(regions.services_list.width < 100);
+        assert!(regions.logs_panel.is_some());
+        let logs = regions.logs_panel.unwrap();
+        assert!(logs.width > 0);
+        assert_eq!(
+            regions.services_list.width + logs.width,
+            100
+        );
+    }
+
+    #[test]
+    fn test_layout_regions_vertical_structure() {
+        let area = Rect::new(0, 0, 100, 50);
+        let regions = get_layout_regions(area, false);
+        // Header is 3 rows, footer is 3 rows, middle is the rest
+        // Services list should start after header (y=3) and end before footer
+        assert_eq!(regions.services_list.y, 3);
+        assert_eq!(regions.services_list.height, 50 - 3 - 3);
+    }
+}

@@ -623,3 +623,1117 @@ impl App {
         self.show_file_state_picker = false;
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::service::{LogEntry, SystemdUnit, UnitProperties, UnitType, TimeRange};
+
+    fn make_unit(name: &str, sub: &str, desc: &str, file_state: Option<&str>) -> SystemdUnit {
+        SystemdUnit {
+            unit: name.into(),
+            load: "loaded".into(),
+            active: "active".into(),
+            sub: sub.into(),
+            description: desc.into(),
+            detail: None,
+            file_state: file_state.map(|s| s.into()),
+        }
+    }
+
+    fn make_log(message: &str) -> LogEntry {
+        LogEntry {
+            timestamp: None,
+            priority: None,
+            pid: None,
+            identifier: None,
+            message: message.into(),
+        }
+    }
+
+    fn test_app_with_services(services: Vec<SystemdUnit>) -> App {
+        let len = services.len();
+        let mut app = App {
+            services,
+            list_state: ListState::default(),
+            should_quit: false,
+            error: None,
+            search_query: String::new(),
+            search_mode: false,
+            filtered_indices: (0..len).collect(),
+            logs: Vec::new(),
+            logs_scroll: 0,
+            last_selected_service: None,
+            status_filter: None,
+            show_logs: false,
+            show_help: false,
+            show_status_picker: false,
+            status_picker_state: ListState::default(),
+            log_search_query: String::new(),
+            log_search_mode: false,
+            log_search_matches: Vec::new(),
+            log_search_match_index: None,
+            user_mode: false,
+            unit_type: UnitType::Service,
+            show_type_picker: false,
+            type_picker_state: ListState::default(),
+            log_priority_filter: None,
+            log_time_range: TimeRange::All,
+            log_filters_dirty: false,
+            show_priority_picker: false,
+            priority_picker_state: ListState::default(),
+            show_time_picker: false,
+            time_picker_state: ListState::default(),
+            show_details: false,
+            detail_scroll: 0,
+            detail_properties: None,
+            detail_unit_name: None,
+            detail_content_height: 0,
+            properties_cache: HashMap::new(),
+            file_state_filter: None,
+            show_file_state_picker: false,
+            file_state_picker_state: ListState::default(),
+        };
+        if !app.filtered_indices.is_empty() {
+            app.list_state.select(Some(0));
+        }
+        app
+    }
+
+    fn test_app_empty() -> App {
+        test_app_with_services(Vec::new())
+    }
+
+    fn test_app_with_subs(subs: &[&str]) -> App {
+        let services: Vec<SystemdUnit> = subs
+            .iter()
+            .enumerate()
+            .map(|(i, sub)| make_unit(&format!("unit{}.service", i), sub, &format!("Unit {}", i), None))
+            .collect();
+        test_app_with_services(services)
+    }
+
+    // Phase 1 — Navigation: next
+
+    #[test]
+    fn test_next_moves_down() {
+        let mut app = test_app_with_subs(&["running", "exited", "dead"]);
+        assert_eq!(app.list_state.selected(), Some(0));
+        app.next();
+        assert_eq!(app.list_state.selected(), Some(1));
+    }
+
+    #[test]
+    fn test_next_wraps_at_end() {
+        let mut app = test_app_with_subs(&["running", "exited"]);
+        app.list_state.select(Some(1));
+        app.next();
+        assert_eq!(app.list_state.selected(), Some(0));
+    }
+
+    #[test]
+    fn test_next_no_op_on_empty() {
+        let mut app = test_app_empty();
+        app.next();
+        assert_eq!(app.list_state.selected(), None);
+    }
+
+    #[test]
+    fn test_next_selects_0_from_none() {
+        let mut app = test_app_with_subs(&["running"]);
+        app.list_state.select(None);
+        app.next();
+        assert_eq!(app.list_state.selected(), Some(0));
+    }
+
+    // Phase 1 — Navigation: previous
+
+    #[test]
+    fn test_previous_moves_up() {
+        let mut app = test_app_with_subs(&["running", "exited", "dead"]);
+        app.list_state.select(Some(2));
+        app.previous();
+        assert_eq!(app.list_state.selected(), Some(1));
+    }
+
+    #[test]
+    fn test_previous_wraps_at_top() {
+        let mut app = test_app_with_subs(&["running", "exited"]);
+        app.list_state.select(Some(0));
+        app.previous();
+        assert_eq!(app.list_state.selected(), Some(1));
+    }
+
+    #[test]
+    fn test_previous_no_op_on_empty() {
+        let mut app = test_app_empty();
+        app.previous();
+        assert_eq!(app.list_state.selected(), None);
+    }
+
+    #[test]
+    fn test_previous_selects_0_from_none() {
+        let mut app = test_app_with_subs(&["running"]);
+        app.list_state.select(None);
+        app.previous();
+        assert_eq!(app.list_state.selected(), Some(0));
+    }
+
+    // Phase 1 — Navigation: go_to_top / go_to_bottom
+
+    #[test]
+    fn test_go_to_top() {
+        let mut app = test_app_with_subs(&["a", "b", "c"]);
+        app.list_state.select(Some(2));
+        app.go_to_top();
+        assert_eq!(app.list_state.selected(), Some(0));
+    }
+
+    #[test]
+    fn test_go_to_top_empty() {
+        let mut app = test_app_empty();
+        app.go_to_top();
+        assert_eq!(app.list_state.selected(), None);
+    }
+
+    #[test]
+    fn test_go_to_bottom() {
+        let mut app = test_app_with_subs(&["a", "b", "c"]);
+        app.go_to_bottom();
+        assert_eq!(app.list_state.selected(), Some(2));
+    }
+
+    #[test]
+    fn test_go_to_bottom_empty() {
+        let mut app = test_app_empty();
+        app.go_to_bottom();
+        assert_eq!(app.list_state.selected(), None);
+    }
+
+    // Phase 1 — Navigation: page_up / page_down
+
+    #[test]
+    fn test_page_down() {
+        let mut app = test_app_with_subs(&["a", "b", "c", "d", "e", "f", "g", "h", "i", "j"]);
+        app.page_down(3);
+        assert_eq!(app.list_state.selected(), Some(3));
+    }
+
+    #[test]
+    fn test_page_down_clamps() {
+        let mut app = test_app_with_subs(&["a", "b", "c"]);
+        app.page_down(10);
+        assert_eq!(app.list_state.selected(), Some(2));
+    }
+
+    #[test]
+    fn test_page_up() {
+        let mut app = test_app_with_subs(&["a", "b", "c", "d", "e"]);
+        app.list_state.select(Some(4));
+        app.page_up(3);
+        assert_eq!(app.list_state.selected(), Some(1));
+    }
+
+    #[test]
+    fn test_page_up_clamps() {
+        let mut app = test_app_with_subs(&["a", "b", "c"]);
+        app.list_state.select(Some(1));
+        app.page_up(10);
+        assert_eq!(app.list_state.selected(), Some(0));
+    }
+
+    #[test]
+    fn test_page_up_empty() {
+        let mut app = test_app_empty();
+        app.page_up(5);
+        assert_eq!(app.list_state.selected(), None);
+    }
+
+    #[test]
+    fn test_page_down_empty() {
+        let mut app = test_app_empty();
+        app.page_down(5);
+        assert_eq!(app.list_state.selected(), None);
+    }
+
+    // Phase 1 — Selection & filtering
+
+    #[test]
+    fn test_selected_unit_returns_correct_unit() {
+        let app = test_app_with_subs(&["running", "exited", "dead"]);
+        let unit = app.selected_unit().unwrap();
+        assert_eq!(unit.sub, "running");
+    }
+
+    #[test]
+    fn test_selected_unit_index_1() {
+        let mut app = test_app_with_subs(&["running", "exited", "dead"]);
+        app.list_state.select(Some(1));
+        let unit = app.selected_unit().unwrap();
+        assert_eq!(unit.sub, "exited");
+    }
+
+    #[test]
+    fn test_selected_unit_with_filter() {
+        let mut app = test_app_with_services(vec![
+            make_unit("a.service", "running", "A", None),
+            make_unit("b.service", "dead", "B", None),
+            make_unit("c.service", "running", "C", None),
+        ]);
+        app.status_filter = Some("running".into());
+        app.update_filter();
+        // filtered_indices should be [0, 2]
+        assert_eq!(app.filtered_indices, vec![0, 2]);
+        // Select the second filtered item
+        app.list_state.select(Some(1));
+        let unit = app.selected_unit().unwrap();
+        assert_eq!(unit.unit, "c.service");
+    }
+
+    #[test]
+    fn test_selected_unit_none_empty() {
+        let app = test_app_empty();
+        assert!(app.selected_unit().is_none());
+    }
+
+    #[test]
+    fn test_selected_unit_none_no_selection() {
+        let mut app = test_app_with_subs(&["running"]);
+        app.list_state.select(None);
+        assert!(app.selected_unit().is_none());
+    }
+
+    #[test]
+    fn test_update_filter_no_filters() {
+        let mut app = test_app_with_subs(&["running", "exited", "dead"]);
+        app.update_filter();
+        assert_eq!(app.filtered_indices, vec![0, 1, 2]);
+    }
+
+    #[test]
+    fn test_update_filter_search_by_unit_name() {
+        let mut app = test_app_with_services(vec![
+            make_unit("ssh.service", "running", "SSH", None),
+            make_unit("sshd.service", "running", "SSH Daemon", None),
+            make_unit("nginx.service", "running", "Nginx", None),
+        ]);
+        app.search_query = "ssh".into();
+        app.update_filter();
+        assert_eq!(app.filtered_indices, vec![0, 1]);
+    }
+
+    #[test]
+    fn test_update_filter_search_by_description() {
+        let mut app = test_app_with_services(vec![
+            make_unit("pg.service", "running", "PostgreSQL database", None),
+            make_unit("nginx.service", "running", "Nginx web", None),
+        ]);
+        app.search_query = "database".into();
+        app.update_filter();
+        assert_eq!(app.filtered_indices, vec![0]);
+    }
+
+    #[test]
+    fn test_update_filter_search_case_insensitive() {
+        let mut app = test_app_with_services(vec![
+            make_unit("SSH.service", "running", "desc", None),
+        ]);
+        app.search_query = "ssh".into();
+        app.update_filter();
+        assert_eq!(app.filtered_indices, vec![0]);
+    }
+
+    #[test]
+    fn test_update_filter_status_filter() {
+        let mut app = test_app_with_subs(&["running", "dead", "running"]);
+        app.status_filter = Some("running".into());
+        app.update_filter();
+        assert_eq!(app.filtered_indices, vec![0, 2]);
+    }
+
+    #[test]
+    fn test_update_filter_combined_search_and_status() {
+        let mut app = test_app_with_services(vec![
+            make_unit("ssh.service", "running", "SSH", None),
+            make_unit("sshd.service", "dead", "SSH Daemon", None),
+            make_unit("nginx.service", "running", "Nginx", None),
+        ]);
+        app.search_query = "ssh".into();
+        app.status_filter = Some("running".into());
+        app.update_filter();
+        assert_eq!(app.filtered_indices, vec![0]);
+    }
+
+    #[test]
+    fn test_update_filter_no_matches_clears_selection() {
+        let mut app = test_app_with_subs(&["running"]);
+        app.search_query = "nonexistent".into();
+        app.update_filter();
+        assert!(app.filtered_indices.is_empty());
+        assert_eq!(app.list_state.selected(), None);
+    }
+
+    #[test]
+    fn test_update_filter_resets_out_of_bounds_selection() {
+        let mut app = test_app_with_subs(&["running", "dead", "exited"]);
+        app.list_state.select(Some(2));
+        app.status_filter = Some("running".into());
+        app.update_filter();
+        // Only 1 match, selection 2 is out of bounds → reset to 0
+        assert_eq!(app.list_state.selected(), Some(0));
+    }
+
+    #[test]
+    fn test_clear_search() {
+        let mut app = test_app_with_subs(&["running", "dead"]);
+        app.search_query = "nonexistent".into();
+        app.update_filter();
+        assert!(app.filtered_indices.is_empty());
+        app.clear_search();
+        assert!(app.search_query.is_empty());
+        assert_eq!(app.filtered_indices, vec![0, 1]);
+    }
+
+    // Phase 4 — File state filtering
+
+    #[test]
+    fn test_update_filter_file_state() {
+        let mut app = test_app_with_services(vec![
+            make_unit("a.service", "running", "A", Some("enabled")),
+            make_unit("b.service", "running", "B", Some("disabled")),
+            make_unit("c.service", "running", "C", Some("enabled")),
+        ]);
+        app.file_state_filter = Some("enabled".into());
+        app.update_filter();
+        assert_eq!(app.filtered_indices, vec![0, 2]);
+    }
+
+    #[test]
+    fn test_update_filter_combined_search_status_file_state() {
+        let mut app = test_app_with_services(vec![
+            make_unit("ssh.service", "running", "SSH", Some("enabled")),
+            make_unit("sshd.service", "running", "SSH Daemon", Some("disabled")),
+            make_unit("nginx.service", "dead", "Nginx", Some("enabled")),
+            make_unit("pg.service", "running", "PostgreSQL", Some("enabled")),
+        ]);
+        app.search_query = "ssh".into();
+        app.status_filter = Some("running".into());
+        app.file_state_filter = Some("enabled".into());
+        app.update_filter();
+        assert_eq!(app.filtered_indices, vec![0]);
+    }
+
+    // Phase 1 — Status picker
+
+    #[test]
+    fn test_status_picker_next() {
+        let mut app = test_app_with_subs(&["running"]);
+        app.open_status_picker();
+        assert_eq!(app.status_picker_state.selected(), Some(0));
+        app.status_picker_next();
+        assert_eq!(app.status_picker_state.selected(), Some(1));
+    }
+
+    #[test]
+    fn test_status_picker_previous() {
+        let mut app = test_app_with_subs(&["running"]);
+        app.open_status_picker();
+        app.status_picker_state.select(Some(2));
+        app.status_picker_previous();
+        assert_eq!(app.status_picker_state.selected(), Some(1));
+    }
+
+    #[test]
+    fn test_status_picker_next_wraps() {
+        let mut app = test_app_with_subs(&["running"]);
+        app.open_status_picker();
+        let last = app.unit_type.status_options().len() - 1;
+        app.status_picker_state.select(Some(last));
+        app.status_picker_next();
+        assert_eq!(app.status_picker_state.selected(), Some(0));
+    }
+
+    #[test]
+    fn test_status_picker_previous_wraps() {
+        let mut app = test_app_with_subs(&["running"]);
+        app.open_status_picker();
+        app.status_picker_state.select(Some(0));
+        app.status_picker_previous();
+        let last = app.unit_type.status_options().len() - 1;
+        assert_eq!(app.status_picker_state.selected(), Some(last));
+    }
+
+    #[test]
+    fn test_status_picker_confirm_all() {
+        let mut app = test_app_with_subs(&["running", "dead"]);
+        app.status_filter = Some("running".into());
+        app.open_status_picker();
+        app.status_picker_state.select(Some(0)); // "All"
+        app.status_picker_confirm();
+        assert_eq!(app.status_filter, None);
+        assert!(!app.show_status_picker);
+    }
+
+    #[test]
+    fn test_status_picker_confirm_running() {
+        let mut app = test_app_with_subs(&["running", "dead"]);
+        app.open_status_picker();
+        app.status_picker_state.select(Some(1)); // "running"
+        app.status_picker_confirm();
+        assert_eq!(app.status_filter, Some("running".into()));
+        assert_eq!(app.filtered_indices, vec![0]);
+        assert!(!app.show_status_picker);
+    }
+
+    #[test]
+    fn test_open_status_picker_preselects_all() {
+        let mut app = test_app_with_subs(&["running"]);
+        app.status_filter = None;
+        app.open_status_picker();
+        assert_eq!(app.status_picker_state.selected(), Some(0));
+    }
+
+    #[test]
+    fn test_open_status_picker_preselects_current() {
+        let mut app = test_app_with_subs(&["running"]);
+        app.status_filter = Some("running".into());
+        app.open_status_picker();
+        // "running" is index 1 for Service type
+        assert_eq!(app.status_picker_state.selected(), Some(1));
+    }
+
+    // Phase 2 — Type picker
+
+    #[test]
+    fn test_type_picker_next() {
+        let mut app = test_app_with_subs(&["running"]);
+        app.open_type_picker();
+        assert_eq!(app.type_picker_state.selected(), Some(0));
+        app.type_picker_next();
+        assert_eq!(app.type_picker_state.selected(), Some(1));
+    }
+
+    #[test]
+    fn test_type_picker_previous() {
+        let mut app = test_app_with_subs(&["running"]);
+        app.open_type_picker();
+        app.type_picker_state.select(Some(2));
+        app.type_picker_previous();
+        assert_eq!(app.type_picker_state.selected(), Some(1));
+    }
+
+    #[test]
+    fn test_type_picker_next_wraps() {
+        let mut app = test_app_with_subs(&["running"]);
+        app.open_type_picker();
+        app.type_picker_state.select(Some(UNIT_TYPES.len() - 1));
+        app.type_picker_next();
+        assert_eq!(app.type_picker_state.selected(), Some(0));
+    }
+
+    #[test]
+    fn test_type_picker_previous_wraps() {
+        let mut app = test_app_with_subs(&["running"]);
+        app.open_type_picker();
+        app.type_picker_state.select(Some(0));
+        app.type_picker_previous();
+        assert_eq!(
+            app.type_picker_state.selected(),
+            Some(UNIT_TYPES.len() - 1)
+        );
+    }
+
+    #[test]
+    fn test_type_picker_confirm_same_type_no_change() {
+        let mut app = test_app_with_subs(&["running", "dead"]);
+        let original_services_len = app.services.len();
+        app.open_type_picker();
+        // Service is index 0, which is already the current type
+        app.type_picker_state.select(Some(0));
+        app.type_picker_confirm();
+        // Services should not be reloaded (same type)
+        assert_eq!(app.services.len(), original_services_len);
+        assert!(!app.show_type_picker);
+    }
+
+    // Phase 4 — File state picker
+
+    #[test]
+    fn test_file_state_picker_next() {
+        let mut app = test_app_with_subs(&["running"]);
+        app.open_file_state_picker();
+        assert_eq!(app.file_state_picker_state.selected(), Some(0));
+        app.file_state_picker_next();
+        assert_eq!(app.file_state_picker_state.selected(), Some(1));
+    }
+
+    #[test]
+    fn test_file_state_picker_previous() {
+        let mut app = test_app_with_subs(&["running"]);
+        app.open_file_state_picker();
+        app.file_state_picker_state.select(Some(3));
+        app.file_state_picker_previous();
+        assert_eq!(app.file_state_picker_state.selected(), Some(2));
+    }
+
+    #[test]
+    fn test_file_state_picker_next_wraps() {
+        let mut app = test_app_with_subs(&["running"]);
+        app.open_file_state_picker();
+        app.file_state_picker_state
+            .select(Some(FILE_STATE_OPTIONS.len() - 1));
+        app.file_state_picker_next();
+        assert_eq!(app.file_state_picker_state.selected(), Some(0));
+    }
+
+    #[test]
+    fn test_file_state_picker_previous_wraps() {
+        let mut app = test_app_with_subs(&["running"]);
+        app.open_file_state_picker();
+        app.file_state_picker_state.select(Some(0));
+        app.file_state_picker_previous();
+        assert_eq!(
+            app.file_state_picker_state.selected(),
+            Some(FILE_STATE_OPTIONS.len() - 1)
+        );
+    }
+
+    #[test]
+    fn test_file_state_picker_confirm_all() {
+        let mut app = test_app_with_services(vec![
+            make_unit("a.service", "running", "A", Some("enabled")),
+            make_unit("b.service", "running", "B", Some("disabled")),
+        ]);
+        app.file_state_filter = Some("enabled".into());
+        app.open_file_state_picker();
+        app.file_state_picker_state.select(Some(0)); // "All"
+        app.file_state_picker_confirm();
+        assert_eq!(app.file_state_filter, None);
+        assert!(!app.show_file_state_picker);
+    }
+
+    #[test]
+    fn test_file_state_picker_confirm_enabled() {
+        let mut app = test_app_with_services(vec![
+            make_unit("a.service", "running", "A", Some("enabled")),
+            make_unit("b.service", "running", "B", Some("disabled")),
+        ]);
+        app.open_file_state_picker();
+        app.file_state_picker_state.select(Some(1)); // "enabled"
+        app.file_state_picker_confirm();
+        assert_eq!(app.file_state_filter, Some("enabled".into()));
+        assert_eq!(app.filtered_indices, vec![0]);
+        assert!(!app.show_file_state_picker);
+    }
+
+    #[test]
+    fn test_open_file_state_picker_preselects_all() {
+        let mut app = test_app_with_subs(&["running"]);
+        app.file_state_filter = None;
+        app.open_file_state_picker();
+        assert_eq!(app.file_state_picker_state.selected(), Some(0));
+    }
+
+    #[test]
+    fn test_open_file_state_picker_preselects_current() {
+        let mut app = test_app_with_subs(&["running"]);
+        app.file_state_filter = Some("disabled".into());
+        app.open_file_state_picker();
+        // "disabled" is index 2 in FILE_STATE_OPTIONS
+        assert_eq!(app.file_state_picker_state.selected(), Some(2));
+    }
+
+    // Phase 3 — Priority picker
+
+    #[test]
+    fn test_priority_picker_next() {
+        let mut app = test_app_with_subs(&["running"]);
+        app.open_priority_picker();
+        assert_eq!(app.priority_picker_state.selected(), Some(0));
+        app.priority_picker_next();
+        assert_eq!(app.priority_picker_state.selected(), Some(1));
+    }
+
+    #[test]
+    fn test_priority_picker_previous() {
+        let mut app = test_app_with_subs(&["running"]);
+        app.open_priority_picker();
+        app.priority_picker_state.select(Some(3));
+        app.priority_picker_previous();
+        assert_eq!(app.priority_picker_state.selected(), Some(2));
+    }
+
+    #[test]
+    fn test_priority_picker_next_wraps() {
+        let mut app = test_app_with_subs(&["running"]);
+        app.open_priority_picker();
+        app.priority_picker_state.select(Some(8)); // last item (0-8 = 9 items)
+        app.priority_picker_next();
+        assert_eq!(app.priority_picker_state.selected(), Some(0));
+    }
+
+    #[test]
+    fn test_priority_picker_previous_wraps() {
+        let mut app = test_app_with_subs(&["running"]);
+        app.open_priority_picker();
+        app.priority_picker_state.select(Some(0));
+        app.priority_picker_previous();
+        assert_eq!(app.priority_picker_state.selected(), Some(8));
+    }
+
+    #[test]
+    fn test_priority_picker_confirm_all() {
+        let mut app = test_app_with_subs(&["running"]);
+        app.log_priority_filter = Some(3);
+        app.open_priority_picker();
+        app.priority_picker_state.select(Some(0)); // "All"
+        app.priority_picker_confirm();
+        assert_eq!(app.log_priority_filter, None);
+        assert!(!app.show_priority_picker);
+    }
+
+    #[test]
+    fn test_priority_picker_confirm_err() {
+        let mut app = test_app_with_subs(&["running"]);
+        app.open_priority_picker();
+        app.priority_picker_state.select(Some(4)); // err (index-1 = 3)
+        app.priority_picker_confirm();
+        assert_eq!(app.log_priority_filter, Some(3));
+        assert!(app.log_filters_dirty);
+        assert!(!app.show_priority_picker);
+    }
+
+    #[test]
+    fn test_open_priority_picker_preselects_current() {
+        let mut app = test_app_with_subs(&["running"]);
+        app.log_priority_filter = Some(5);
+        app.open_priority_picker();
+        assert_eq!(app.priority_picker_state.selected(), Some(6)); // 5 + 1
+    }
+
+    // Phase 3 — Time picker
+
+    #[test]
+    fn test_time_picker_next() {
+        let mut app = test_app_with_subs(&["running"]);
+        app.open_time_picker();
+        assert_eq!(app.time_picker_state.selected(), Some(0));
+        app.time_picker_next();
+        assert_eq!(app.time_picker_state.selected(), Some(1));
+    }
+
+    #[test]
+    fn test_time_picker_previous() {
+        let mut app = test_app_with_subs(&["running"]);
+        app.open_time_picker();
+        app.time_picker_state.select(Some(3));
+        app.time_picker_previous();
+        assert_eq!(app.time_picker_state.selected(), Some(2));
+    }
+
+    #[test]
+    fn test_time_picker_next_wraps() {
+        let mut app = test_app_with_subs(&["running"]);
+        app.open_time_picker();
+        app.time_picker_state.select(Some(TIME_RANGES.len() - 1));
+        app.time_picker_next();
+        assert_eq!(app.time_picker_state.selected(), Some(0));
+    }
+
+    #[test]
+    fn test_time_picker_previous_wraps() {
+        let mut app = test_app_with_subs(&["running"]);
+        app.open_time_picker();
+        app.time_picker_state.select(Some(0));
+        app.time_picker_previous();
+        assert_eq!(
+            app.time_picker_state.selected(),
+            Some(TIME_RANGES.len() - 1)
+        );
+    }
+
+    #[test]
+    fn test_time_picker_confirm() {
+        let mut app = test_app_with_subs(&["running"]);
+        app.open_time_picker();
+        app.time_picker_state.select(Some(2)); // OneHour
+        app.time_picker_confirm();
+        assert_eq!(app.log_time_range, TimeRange::OneHour);
+        assert!(app.log_filters_dirty);
+        assert!(!app.show_time_picker);
+    }
+
+    #[test]
+    fn test_open_time_picker_preselects_current() {
+        let mut app = test_app_with_subs(&["running"]);
+        app.log_time_range = TimeRange::SevenDays;
+        app.open_time_picker();
+        assert_eq!(app.time_picker_state.selected(), Some(4)); // SevenDays is index 4
+    }
+
+    // Phase 1 — Toggles
+
+    #[test]
+    fn test_toggle_logs() {
+        let mut app = test_app_with_subs(&["running"]);
+        assert!(!app.show_logs);
+        app.toggle_logs();
+        assert!(app.show_logs);
+        app.toggle_logs();
+        assert!(!app.show_logs);
+    }
+
+    #[test]
+    fn test_toggle_help() {
+        let mut app = test_app_with_subs(&["running"]);
+        assert!(!app.show_help);
+        app.toggle_help();
+        assert!(app.show_help);
+        app.toggle_help();
+        assert!(!app.show_help);
+    }
+
+    // Phase 1 — User mode
+
+    #[test]
+    fn test_toggle_user_mode_flips_flag() {
+        let mut app = test_app_with_subs(&["running"]);
+        assert!(!app.user_mode);
+        app.toggle_user_mode();
+        assert!(app.user_mode);
+    }
+
+    #[test]
+    fn test_toggle_user_mode_clears_state() {
+        let mut app = test_app_with_subs(&["running"]);
+        app.last_selected_service = Some("test".into());
+        app.logs = vec![make_log("log1")];
+        app.log_search_query = "search".into();
+        app.log_priority_filter = Some(3);
+        app.log_time_range = TimeRange::OneHour;
+        app.properties_cache
+            .insert("test".into(), UnitProperties::default());
+        app.file_state_filter = Some("enabled".into());
+
+        app.toggle_user_mode();
+
+        assert_eq!(app.last_selected_service, None);
+        assert!(app.logs.is_empty());
+        assert!(app.log_search_query.is_empty());
+        assert_eq!(app.log_priority_filter, None);
+        assert_eq!(app.log_time_range, TimeRange::All);
+        assert!(app.properties_cache.is_empty());
+        assert_eq!(app.file_state_filter, None);
+    }
+
+    // Phase 3 — Log scrolling
+
+    #[test]
+    fn test_scroll_logs_up() {
+        let mut app = test_app_with_subs(&["running"]);
+        app.logs = vec![make_log("a"), make_log("b"), make_log("c")];
+        app.logs_scroll = 2;
+        app.scroll_logs_up(1);
+        assert_eq!(app.logs_scroll, 1);
+    }
+
+    #[test]
+    fn test_scroll_logs_up_clamps_at_zero() {
+        let mut app = test_app_with_subs(&["running"]);
+        app.logs = vec![make_log("a")];
+        app.logs_scroll = 0;
+        app.scroll_logs_up(5);
+        assert_eq!(app.logs_scroll, 0);
+    }
+
+    #[test]
+    fn test_scroll_logs_down() {
+        let mut app = test_app_with_subs(&["running"]);
+        app.logs = vec![
+            make_log("a"),
+            make_log("b"),
+            make_log("c"),
+            make_log("d"),
+            make_log("e"),
+        ];
+        app.logs_scroll = 0;
+        app.scroll_logs_down(1, 3); // visible_lines = 3
+        assert_eq!(app.logs_scroll, 1);
+    }
+
+    #[test]
+    fn test_scroll_logs_down_clamps_at_max() {
+        let mut app = test_app_with_subs(&["running"]);
+        app.logs = vec![make_log("a"), make_log("b"), make_log("c")];
+        app.logs_scroll = 0;
+        app.scroll_logs_down(100, 2); // max = 3 - 2 = 1
+        assert_eq!(app.logs_scroll, 1);
+    }
+
+    #[test]
+    fn test_scroll_logs_down_empty() {
+        let mut app = test_app_with_subs(&["running"]);
+        app.scroll_logs_down(1, 10);
+        assert_eq!(app.logs_scroll, 0);
+    }
+
+    #[test]
+    fn test_logs_go_to_top() {
+        let mut app = test_app_with_subs(&["running"]);
+        app.logs = vec![make_log("a"), make_log("b")];
+        app.logs_scroll = 5;
+        app.logs_go_to_top();
+        assert_eq!(app.logs_scroll, 0);
+    }
+
+    #[test]
+    fn test_logs_go_to_bottom() {
+        let mut app = test_app_with_subs(&["running"]);
+        app.logs = vec![
+            make_log("a"),
+            make_log("b"),
+            make_log("c"),
+            make_log("d"),
+            make_log("e"),
+        ];
+        app.logs_scroll = 0;
+        app.logs_go_to_bottom(3); // visible = 3, max = 5 - 3 = 2
+        assert_eq!(app.logs_scroll, 2);
+    }
+
+    // Phase 4 — Detail scrolling
+
+    #[test]
+    fn test_detail_scroll_up() {
+        let mut app = test_app_with_subs(&["running"]);
+        app.detail_scroll = 5;
+        app.detail_scroll_up(2);
+        assert_eq!(app.detail_scroll, 3);
+    }
+
+    #[test]
+    fn test_detail_scroll_up_clamps() {
+        let mut app = test_app_with_subs(&["running"]);
+        app.detail_scroll = 2;
+        app.detail_scroll_up(10);
+        assert_eq!(app.detail_scroll, 0);
+    }
+
+    #[test]
+    fn test_detail_scroll_down() {
+        let mut app = test_app_with_subs(&["running"]);
+        app.detail_scroll = 0;
+        app.detail_scroll_down(3, 20, 10); // content=20, visible=10
+        assert_eq!(app.detail_scroll, 3);
+    }
+
+    #[test]
+    fn test_detail_scroll_down_clamps_at_max() {
+        let mut app = test_app_with_subs(&["running"]);
+        app.detail_scroll = 0;
+        app.detail_scroll_down(100, 20, 10); // max = 20 - 10 = 10
+        assert_eq!(app.detail_scroll, 10);
+    }
+
+    #[test]
+    fn test_detail_scroll_down_no_scroll_when_content_fits() {
+        let mut app = test_app_with_subs(&["running"]);
+        app.detail_scroll = 0;
+        app.detail_scroll_down(5, 10, 20); // content=10 < visible=20
+        assert_eq!(app.detail_scroll, 0);
+    }
+
+    // Phase 4 — Details modal
+
+    #[test]
+    fn test_close_details() {
+        let mut app = test_app_with_subs(&["running"]);
+        app.show_details = true;
+        app.detail_properties = Some(UnitProperties::default());
+        app.detail_unit_name = Some("test.service".into());
+        app.detail_scroll = 5;
+
+        app.close_details();
+
+        assert!(!app.show_details);
+        assert!(app.detail_properties.is_none());
+        assert!(app.detail_unit_name.is_none());
+        assert_eq!(app.detail_scroll, 0);
+    }
+
+    #[test]
+    fn test_open_details_uses_cache() {
+        let mut app = test_app_with_services(vec![
+            make_unit("test.service", "running", "Test", None),
+        ]);
+        let mut props = UnitProperties::default();
+        props.description = "Cached description".into();
+        app.properties_cache
+            .insert("test.service".into(), props);
+
+        app.open_details();
+
+        assert!(app.show_details);
+        assert_eq!(app.detail_unit_name.as_deref(), Some("test.service"));
+        assert_eq!(
+            app.detail_properties.as_ref().unwrap().description,
+            "Cached description"
+        );
+    }
+
+    // Phase 3 — Log search
+
+    #[test]
+    fn test_update_log_search_finds_matches() {
+        let mut app = test_app_with_subs(&["running"]);
+        app.logs = vec![
+            make_log("hello world"),
+            make_log("goodbye"),
+            make_log("hello again"),
+        ];
+        app.log_search_query = "hello".into();
+        app.update_log_search();
+        assert_eq!(app.log_search_matches, vec![0, 2]);
+        assert_eq!(app.log_search_match_index, Some(0));
+        assert_eq!(app.logs_scroll, 0); // scrolled to first match
+    }
+
+    #[test]
+    fn test_update_log_search_case_insensitive() {
+        let mut app = test_app_with_subs(&["running"]);
+        app.logs = vec![make_log("Hello World"), make_log("no match")];
+        app.log_search_query = "hello".into();
+        app.update_log_search();
+        assert_eq!(app.log_search_matches, vec![0]);
+    }
+
+    #[test]
+    fn test_update_log_search_no_matches() {
+        let mut app = test_app_with_subs(&["running"]);
+        app.logs = vec![make_log("hello")];
+        app.log_search_query = "xyz".into();
+        app.update_log_search();
+        assert!(app.log_search_matches.is_empty());
+        assert_eq!(app.log_search_match_index, None);
+    }
+
+    #[test]
+    fn test_update_log_search_empty_query() {
+        let mut app = test_app_with_subs(&["running"]);
+        app.logs = vec![make_log("hello")];
+        app.log_search_query = "".into();
+        app.update_log_search();
+        assert!(app.log_search_matches.is_empty());
+        assert_eq!(app.log_search_match_index, None);
+    }
+
+    #[test]
+    fn test_next_log_match() {
+        let mut app = test_app_with_subs(&["running"]);
+        app.logs = vec![
+            make_log("match1"),
+            make_log("no"),
+            make_log("match2"),
+        ];
+        app.log_search_query = "match".into();
+        app.update_log_search();
+        assert_eq!(app.log_search_match_index, Some(0));
+        app.next_log_match(10);
+        assert_eq!(app.log_search_match_index, Some(1));
+    }
+
+    #[test]
+    fn test_prev_log_match() {
+        let mut app = test_app_with_subs(&["running"]);
+        app.logs = vec![
+            make_log("match1"),
+            make_log("no"),
+            make_log("match2"),
+        ];
+        app.log_search_query = "match".into();
+        app.update_log_search();
+        app.log_search_match_index = Some(1);
+        app.prev_log_match(10);
+        assert_eq!(app.log_search_match_index, Some(0));
+    }
+
+    #[test]
+    fn test_next_log_match_wraps() {
+        let mut app = test_app_with_subs(&["running"]);
+        app.logs = vec![make_log("match1"), make_log("match2")];
+        app.log_search_query = "match".into();
+        app.update_log_search();
+        app.log_search_match_index = Some(1); // last match
+        app.next_log_match(10);
+        assert_eq!(app.log_search_match_index, Some(0));
+    }
+
+    #[test]
+    fn test_prev_log_match_wraps() {
+        let mut app = test_app_with_subs(&["running"]);
+        app.logs = vec![make_log("match1"), make_log("match2")];
+        app.log_search_query = "match".into();
+        app.update_log_search();
+        app.log_search_match_index = Some(0); // first match
+        app.prev_log_match(10);
+        assert_eq!(app.log_search_match_index, Some(1));
+    }
+
+    #[test]
+    fn test_next_log_match_empty() {
+        let mut app = test_app_with_subs(&["running"]);
+        app.next_log_match(10);
+        assert_eq!(app.log_search_match_index, None);
+    }
+
+    #[test]
+    fn test_prev_log_match_empty() {
+        let mut app = test_app_with_subs(&["running"]);
+        app.prev_log_match(10);
+        assert_eq!(app.log_search_match_index, None);
+    }
+
+    #[test]
+    fn test_next_log_match_scrolls_when_out_of_view() {
+        let mut app = test_app_with_subs(&["running"]);
+        app.logs = (0..20)
+            .map(|i| {
+                if i == 0 || i == 15 {
+                    make_log("match")
+                } else {
+                    make_log("no")
+                }
+            })
+            .collect();
+        app.log_search_query = "match".into();
+        app.update_log_search();
+        // matches at 0 and 15
+        assert_eq!(app.log_search_matches, vec![0, 15]);
+        app.logs_scroll = 0;
+        app.next_log_match(5); // visible = 5, match at 15 is out of view
+        assert_eq!(app.log_search_match_index, Some(1));
+        assert_eq!(app.logs_scroll, 15);
+    }
+
+    #[test]
+    fn test_clear_log_search() {
+        let mut app = test_app_with_subs(&["running"]);
+        app.log_search_query = "test".into();
+        app.log_search_matches = vec![0, 1];
+        app.log_search_match_index = Some(0);
+
+        app.clear_log_search();
+
+        assert!(app.log_search_query.is_empty());
+        assert!(app.log_search_matches.is_empty());
+        assert_eq!(app.log_search_match_index, None);
+    }
+
+    #[test]
+    fn test_mark_logs_dirty() {
+        let mut app = test_app_with_subs(&["running"]);
+        assert!(!app.log_filters_dirty);
+        app.mark_logs_dirty();
+        assert!(app.log_filters_dirty);
+    }
+}

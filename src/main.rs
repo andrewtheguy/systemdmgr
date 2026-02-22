@@ -392,3 +392,62 @@ fn mouse_in_rect(mouse: MouseEvent, rect: Rect) -> bool {
         && mouse.row >= rect.y
         && mouse.row < rect.y + rect.height
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crossterm::event::{KeyModifiers, MouseButton};
+
+    fn make_mouse(column: u16, row: u16) -> MouseEvent {
+        MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column,
+            row,
+            modifiers: KeyModifiers::empty(),
+        }
+    }
+
+    #[test]
+    fn test_mouse_in_rect_inside() {
+        let rect = Rect::new(10, 10, 20, 15);
+        assert!(mouse_in_rect(make_mouse(15, 15), rect));
+    }
+
+    #[test]
+    fn test_mouse_in_rect_top_left_corner() {
+        let rect = Rect::new(10, 10, 20, 15);
+        assert!(mouse_in_rect(make_mouse(10, 10), rect));
+    }
+
+    #[test]
+    fn test_mouse_in_rect_bottom_right_exclusive() {
+        let rect = Rect::new(10, 10, 20, 15);
+        // x=30, y=25 is outside (exclusive boundary)
+        assert!(!mouse_in_rect(make_mouse(30, 25), rect));
+    }
+
+    #[test]
+    fn test_mouse_in_rect_just_inside_bottom_right() {
+        let rect = Rect::new(10, 10, 20, 15);
+        // x=29, y=24 is the last inside position
+        assert!(mouse_in_rect(make_mouse(29, 24), rect));
+    }
+
+    #[test]
+    fn test_mouse_in_rect_outside_left() {
+        let rect = Rect::new(10, 10, 20, 15);
+        assert!(!mouse_in_rect(make_mouse(9, 15), rect));
+    }
+
+    #[test]
+    fn test_mouse_in_rect_outside_above() {
+        let rect = Rect::new(10, 10, 20, 15);
+        assert!(!mouse_in_rect(make_mouse(15, 9), rect));
+    }
+
+    #[test]
+    fn test_mouse_in_rect_zero_rect() {
+        let rect = Rect::new(5, 5, 0, 0);
+        assert!(!mouse_in_rect(make_mouse(5, 5), rect));
+    }
+}
