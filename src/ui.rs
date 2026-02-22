@@ -860,31 +860,58 @@ fn render_confirm_dialog(frame: &mut Frame, app: &App) {
         _ => return,
     };
 
-    let message = action.confirmation_message(unit_name);
-
-    let text = vec![
-        Line::from(""),
-        Line::from(vec![Span::styled(
-            message,
-            Style::default()
-                .fg(Color::Yellow)
-                .add_modifier(Modifier::BOLD),
-        )]),
-        Line::from(""),
-        Line::from(vec![
-            Span::styled("[Y]", Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)),
-            Span::raw(" Confirm  "),
-            Span::styled("[N/Esc]", Style::default().fg(Color::Red).add_modifier(Modifier::BOLD)),
-            Span::raw(" Cancel"),
-        ]),
-    ];
+    let (text, title) = if let Some(ref result) = app.action_result {
+        // Show result
+        let (msg, color) = match result {
+            Ok(msg) => (msg.as_str(), Color::Green),
+            Err(msg) => (msg.as_str(), Color::Red),
+        };
+        let text = vec![
+            Line::from(""),
+            Line::from(vec![Span::styled(
+                msg.to_string(),
+                Style::default().fg(color).add_modifier(Modifier::BOLD),
+            )]),
+            Line::from(""),
+            Line::from(vec![Span::styled(
+                "Press any key to dismiss",
+                Style::default().fg(Color::DarkGray),
+            )]),
+        ];
+        let title = if result.is_ok() {
+            "Action Succeeded"
+        } else {
+            "Action Failed"
+        };
+        (text, title)
+    } else {
+        // Show confirmation prompt
+        let message = action.confirmation_message(unit_name);
+        let text = vec![
+            Line::from(""),
+            Line::from(vec![Span::styled(
+                message,
+                Style::default()
+                    .fg(Color::Yellow)
+                    .add_modifier(Modifier::BOLD),
+            )]),
+            Line::from(""),
+            Line::from(vec![
+                Span::styled("[Y]", Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)),
+                Span::raw(" Confirm  "),
+                Span::styled("[N/Esc]", Style::default().fg(Color::Red).add_modifier(Modifier::BOLD)),
+                Span::raw(" Cancel"),
+            ]),
+        ];
+        (text, "Confirm Action")
+    };
 
     let paragraph = Paragraph::new(text)
         .style(Style::default().fg(Color::White))
         .block(
             Block::default()
                 .borders(Borders::ALL)
-                .title("Confirm Action")
+                .title(title)
                 .style(Style::default().bg(Color::Black)),
         )
         .alignment(ratatui::layout::Alignment::Center);

@@ -121,10 +121,15 @@ fn main() -> io::Result<()> {
 
             // Confirmation dialog modal
             if app.show_confirm {
-                match key.code {
-                    KeyCode::Char('y') | KeyCode::Char('Y') => app.confirm_yes(),
-                    KeyCode::Char('n') | KeyCode::Char('N') | KeyCode::Esc => app.confirm_no(),
-                    _ => {}
+                if app.action_result.is_some() {
+                    // Result showing — any key dismisses
+                    app.dismiss_action_result();
+                } else {
+                    match key.code {
+                        KeyCode::Char('y') | KeyCode::Char('Y') => app.confirm_yes(),
+                        KeyCode::Char('n') | KeyCode::Char('N') | KeyCode::Esc => app.confirm_no(),
+                        _ => {}
+                    }
                 }
                 continue;
             }

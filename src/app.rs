@@ -57,6 +57,7 @@ pub struct App {
     pub show_confirm: bool,
     pub confirm_action: Option<UnitAction>,
     pub confirm_unit_name: Option<String>,
+    pub action_result: Option<Result<String, String>>,
     pub status_message: Option<String>,
 }
 
@@ -108,6 +109,7 @@ impl App {
             show_confirm: false,
             confirm_action: None,
             confirm_unit_name: None,
+            action_result: None,
             status_message: None,
         };
         app.load_services();
@@ -697,29 +699,27 @@ impl App {
         if let (Some(action), Some(unit_name)) = (self.confirm_action, &self.confirm_unit_name)
         {
             let unit_name = unit_name.clone();
-            match execute_unit_action(action, &unit_name, self.user_mode) {
-                Ok(msg) => {
-                    self.status_message = Some(msg);
-                    self.error = None;
-                }
-                Err(e) => {
-                    self.error = Some(e);
-                }
-            }
+            let result = execute_unit_action(action, &unit_name, self.user_mode);
+            self.action_result = Some(result);
             self.load_services();
             if self.show_logs {
                 self.mark_logs_dirty();
             }
         }
-        self.show_confirm = false;
-        self.confirm_action = None;
-        self.confirm_unit_name = None;
     }
 
     pub fn confirm_no(&mut self) {
         self.show_confirm = false;
         self.confirm_action = None;
         self.confirm_unit_name = None;
+        self.action_result = None;
+    }
+
+    pub fn dismiss_action_result(&mut self) {
+        self.show_confirm = false;
+        self.confirm_action = None;
+        self.confirm_unit_name = None;
+        self.action_result = None;
     }
 
     pub fn clear_status_message(&mut self) {
@@ -802,6 +802,7 @@ mod tests {
             show_confirm: false,
             confirm_action: None,
             confirm_unit_name: None,
+            action_result: None,
             status_message: None,
         };
         if !app.filtered_indices.is_empty() {
@@ -1953,6 +1954,21 @@ mod tests {
         assert!(!app.show_confirm);
         assert!(app.confirm_action.is_none());
         assert!(app.confirm_unit_name.is_none());
+        assert!(app.action_result.is_none());
+    }
+
+    #[test]
+    fn test_dismiss_action_result() {
+        let mut app = test_app_with_subs(&["running"]);
+        app.show_confirm = true;
+        app.confirm_action = Some(UnitAction::Stop);
+        app.confirm_unit_name = Some("test.service".into());
+        app.action_result = Some(Ok("Done".into()));
+        app.dismiss_action_result();
+        assert!(!app.show_confirm);
+        assert!(app.confirm_action.is_none());
+        assert!(app.confirm_unit_name.is_none());
+        assert!(app.action_result.is_none());
     }
 
     #[test]
