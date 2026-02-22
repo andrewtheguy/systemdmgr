@@ -223,9 +223,6 @@ fn main() -> io::Result<()> {
             } else if app.show_logs {
                 // Branch 3: Log focus normal mode
                 match key.code {
-                    KeyCode::Char('q') => {
-                        app.should_quit = true;
-                    }
                     KeyCode::Char('l') => {
                         app.clear_log_search();
                         app.toggle_logs();
@@ -270,33 +267,11 @@ fn main() -> io::Result<()> {
                     KeyCode::Char('d') if key.modifiers.contains(KeyModifiers::CONTROL) => {
                         app.scroll_logs_down(visible_lines / 2, visible_lines);
                     }
-                    KeyCode::Char('u') => {
-                        app.toggle_user_mode();
-                    }
-                    KeyCode::Char('t') => {
-                        app.open_type_picker();
-                    }
                     KeyCode::Char('p') => {
                         app.open_priority_picker();
                     }
                     KeyCode::Char('T') => {
                         app.open_time_picker();
-                    }
-                    KeyCode::Char('i') | KeyCode::Enter => {
-                        app.open_details();
-                    }
-                    KeyCode::Char('f') => {
-                        app.open_file_state_picker();
-                    }
-                    KeyCode::Char('x') => {
-                        app.clear_status_message();
-                        app.open_action_picker();
-                    }
-                    KeyCode::Char('R') => {
-                        app.clear_status_message();
-                        app.confirm_action = Some(service::UnitAction::DaemonReload);
-                        app.confirm_unit_name = Some(String::new());
-                        app.show_confirm = true;
                     }
                     _ => {}
                 }

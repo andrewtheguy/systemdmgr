@@ -315,9 +315,9 @@ pub fn render(frame: &mut Frame, app: &mut App) {
     } else if app.log_search_mode {
         "Type to search logs | Esc/Enter: Exit search | ?: Help"
     } else if app.show_logs && !app.log_search_query.is_empty() {
-        "l: Exit logs | j/k: Scroll | n/N: Next/Prev match | x: Actions | i: Details | f: File state | p: Priority | T: Time | ?: Help"
+        "l: Exit logs | j/k: Scroll | n/N: Next/Prev match | p: Priority | T: Time | /: Search | ?: Help"
     } else if app.show_logs {
-        "l: Exit logs | j/k: Scroll | g/G: Top/Bottom | /: Search | x: Actions | i: Details | f: File state | p: Priority | T: Time | ?: Help"
+        "l: Exit logs | j/k: Scroll | g/G: Top/Bottom | /: Search | p: Priority | T: Time | ?: Help"
     } else if app.search_mode {
         "Type to search | Esc/Enter: Exit search | ?: Help"
     } else if !app.search_query.is_empty() || app.status_filter.is_some() || app.file_state_filter.is_some() {
