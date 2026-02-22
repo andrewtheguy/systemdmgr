@@ -257,7 +257,29 @@ pub fn render(frame: &mut Frame, app: &mut App) {
     }
 
     // Footer with keybindings
-    let footer_text = if app.log_search_mode {
+    let footer_text = if app.show_help {
+        "Press any key to close"
+    } else if app.show_confirm && app.action_in_progress {
+        "Executing..."
+    } else if app.show_confirm && app.action_result.is_some() {
+        "Press any key to dismiss"
+    } else if app.show_confirm {
+        "Y: Confirm | N/Esc: Cancel"
+    } else if app.show_action_picker {
+        "j/k: Navigate | Enter: Select | Esc/x: Close"
+    } else if app.show_details {
+        "j/k: Scroll | g/G: Top/Bottom | PgUp/PgDn: Page | Esc/i: Close"
+    } else if app.show_status_picker {
+        "j/k: Navigate | Enter: Select | Esc/s: Close"
+    } else if app.show_type_picker {
+        "j/k: Navigate | Enter: Select | Esc/t: Close"
+    } else if app.show_priority_picker {
+        "j/k: Navigate | Enter: Select | Esc/p: Close"
+    } else if app.show_time_picker {
+        "j/k: Navigate | Enter: Select | Esc/T: Close"
+    } else if app.show_file_state_picker {
+        "j/k: Navigate | Enter: Select | Esc/f: Close"
+    } else if app.log_search_mode {
         "Type to search logs | Esc/Enter: Exit search | ?: Help"
     } else if app.show_logs && !app.log_search_query.is_empty() {
         "l: Exit logs | j/k: Scroll | n/N: Next/Prev match | x: Actions | i: Details | f: File state | p: Priority | T: Time | ?: Help"
