@@ -1,8 +1,10 @@
+use std::collections::HashMap;
+
 use ratatui::widgets::ListState;
 
 use crate::service::{
-    fetch_log_entries, fetch_units, LogEntry, SystemdUnit, TimeRange, UnitType, UNIT_TYPES,
-    TIME_RANGES,
+    fetch_log_entries, fetch_unit_properties, fetch_units, LogEntry, SystemdUnit, TimeRange,
+    UnitProperties, UnitType, FILE_STATE_OPTIONS, UNIT_TYPES, TIME_RANGES,
 };
 
 pub struct App {
@@ -36,6 +38,17 @@ pub struct App {
     pub priority_picker_state: ListState,
     pub show_time_picker: bool,
     pub time_picker_state: ListState,
+    // Details modal
+    pub show_details: bool,
+    pub detail_scroll: usize,
+    pub detail_properties: Option<UnitProperties>,
+    pub detail_unit_name: Option<String>,
+    pub detail_content_height: usize,
+    pub properties_cache: HashMap<String, UnitProperties>,
+    // File state filter
+    pub file_state_filter: Option<String>,
+    pub show_file_state_picker: bool,
+    pub file_state_picker_state: ListState,
 }
 
 impl App {
@@ -71,12 +84,22 @@ impl App {
             priority_picker_state: ListState::default(),
             show_time_picker: false,
             time_picker_state: ListState::default(),
+            show_details: false,
+            detail_scroll: 0,
+            detail_properties: None,
+            detail_unit_name: None,
+            detail_content_height: 0,
+            properties_cache: HashMap::new(),
+            file_state_filter: None,
+            show_file_state_picker: false,
+            file_state_picker_state: ListState::default(),
         };
         app.load_services();
         app
     }
 
     pub fn load_services(&mut self) {
+        self.properties_cache.clear();
         match fetch_units(self.unit_type, self.user_mode) {
             Ok(services) => {
                 self.services = services;
@@ -108,7 +131,11 @@ impl App {
                 let matches_status = self.status_filter.is_none()
                     || self.status_filter.as_ref() == Some(&service.sub);
 
-                matches_search && matches_status
+                // File state filter
+                let matches_file_state = self.file_state_filter.is_none()
+                    || service.file_state.as_ref() == self.file_state_filter.as_ref();
+
+                matches_search && matches_status && matches_file_state
             })
             .map(|(i, _)| i)
             .collect();
@@ -211,12 +238,14 @@ impl App {
             if new_type != self.unit_type {
                 self.unit_type = new_type;
                 self.status_filter = None;
+                self.file_state_filter = None;
                 self.search_query.clear();
                 self.last_selected_service = None;
                 self.logs.clear();
                 self.clear_log_search();
                 self.log_priority_filter = None;
                 self.log_time_range = TimeRange::All;
+                self.properties_cache.clear();
                 self.load_services();
             }
         }
@@ -508,6 +537,89 @@ impl App {
         self.clear_log_search();
         self.log_priority_filter = None;
         self.log_time_range = TimeRange::All;
+        self.properties_cache.clear();
+        self.file_state_filter = None;
         self.load_services();
+    }
+
+    // Details modal methods
+
+    pub fn open_details(&mut self) {
+        if let Some(unit) = self.selected_unit() {
+            let name = unit.unit.clone();
+            let props = if let Some(cached) = self.properties_cache.get(&name) {
+                cached.clone()
+            } else {
+                let props = fetch_unit_properties(&name, self.user_mode);
+                self.properties_cache.insert(name.clone(), props.clone());
+                props
+            };
+            self.detail_unit_name = Some(name);
+            self.detail_properties = Some(props);
+            self.detail_scroll = 0;
+            self.show_details = true;
+        }
+    }
+
+    pub fn close_details(&mut self) {
+        self.show_details = false;
+        self.detail_properties = None;
+        self.detail_unit_name = None;
+        self.detail_scroll = 0;
+    }
+
+    pub fn detail_scroll_up(&mut self, amount: usize) {
+        self.detail_scroll = self.detail_scroll.saturating_sub(amount);
+    }
+
+    pub fn detail_scroll_down(&mut self, amount: usize, content_height: usize, visible_height: usize) {
+        if content_height > visible_height {
+            let max_scroll = content_height.saturating_sub(visible_height);
+            self.detail_scroll = (self.detail_scroll.saturating_add(amount)).min(max_scroll);
+        }
+    }
+
+    // File state picker methods
+
+    pub fn open_file_state_picker(&mut self) {
+        self.show_file_state_picker = true;
+        let index = match &self.file_state_filter {
+            None => 0,
+            Some(s) => FILE_STATE_OPTIONS
+                .iter()
+                .position(|&opt| opt == s)
+                .unwrap_or(0),
+        };
+        self.file_state_picker_state.select(Some(index));
+    }
+
+    pub fn close_file_state_picker(&mut self) {
+        self.show_file_state_picker = false;
+    }
+
+    pub fn file_state_picker_next(&mut self) {
+        let len = FILE_STATE_OPTIONS.len();
+        let i = self.file_state_picker_state.selected().unwrap_or(0);
+        let next = (i + 1) % len;
+        self.file_state_picker_state.select(Some(next));
+    }
+
+    pub fn file_state_picker_previous(&mut self) {
+        let len = FILE_STATE_OPTIONS.len();
+        let i = self.file_state_picker_state.selected().unwrap_or(0);
+        let prev = if i == 0 { len - 1 } else { i - 1 };
+        self.file_state_picker_state.select(Some(prev));
+    }
+
+    pub fn file_state_picker_confirm(&mut self) {
+        if let Some(i) = self.file_state_picker_state.selected() {
+            if i == 0 {
+                self.file_state_filter = None;
+            } else {
+                self.file_state_filter = Some(FILE_STATE_OPTIONS[i].to_string());
+            }
+            self.update_filter();
+        }
+        self.show_file_state_picker = false;
     }
 }

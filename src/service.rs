@@ -125,6 +125,31 @@ pub struct SystemdUnit {
     pub description: String,
     #[serde(skip)]
     pub detail: Option<String>,
+    #[serde(skip)]
+    pub file_state: Option<String>,
+}
+
+pub const FILE_STATE_OPTIONS: &[&str] = &["All", "enabled", "disabled", "static", "masked", "indirect"];
+
+#[derive(Debug, Clone, Default)]
+pub struct UnitProperties {
+    pub fragment_path: String,
+    pub unit_file_state: String,
+    pub active_state: String,
+    pub sub_state: String,
+    pub load_state: String,
+    pub description: String,
+    pub main_pid: u32,
+    pub exec_main_start_timestamp: String,
+    pub memory_current: Option<u64>,
+    pub cpu_usage_nsec: Option<u64>,
+    pub requires: Vec<String>,
+    pub wants: Vec<String>,
+    pub after: Vec<String>,
+    pub before: Vec<String>,
+    pub conflicts: Vec<String>,
+    pub triggered_by: Vec<String>,
+    pub triggers: Vec<String>,
 }
 
 impl SystemdUnit {
@@ -268,6 +293,8 @@ pub fn fetch_units(unit_type: UnitType, user_mode: bool) -> Result<Vec<SystemdUn
         _ => {}
     }
 
+    merge_file_states(&mut units, unit_type, user_mode);
+
     Ok(units)
 }
 
@@ -366,5 +393,147 @@ fn merge_socket_details(units: &mut [SystemdUnit], user_mode: bool) {
         if let Some(entry) = map.get(unit.unit.as_str()) {
             unit.detail = Some(entry.listen.clone());
         }
+    }
+}
+
+#[derive(Deserialize)]
+struct UnitFileEntry {
+    unit_file: String,
+    state: String,
+}
+
+fn fetch_unit_file_states(unit_type: UnitType, user_mode: bool) -> HashMap<String, String> {
+    let mut args = Vec::new();
+    if user_mode {
+        args.push("--user");
+    }
+    let type_arg = format!("--type={}", unit_type.systemctl_type());
+    args.extend(["list-unit-files", &type_arg, "--no-pager", "--output=json"]);
+
+    let Ok(output) = Command::new("systemctl").args(&args).output() else {
+        return HashMap::new();
+    };
+    if !output.status.success() {
+        return HashMap::new();
+    }
+
+    let Ok(entries) = serde_json::from_slice::<Vec<UnitFileEntry>>(&output.stdout) else {
+        return HashMap::new();
+    };
+
+    entries
+        .into_iter()
+        .map(|e| {
+            // unit_file may be a full path like /usr/lib/systemd/system/foo.service
+            // Extract just the filename for matching
+            let name = e
+                .unit_file
+                .rsplit('/')
+                .next()
+                .unwrap_or(&e.unit_file)
+                .to_string();
+            (name, e.state)
+        })
+        .collect()
+}
+
+fn merge_file_states(units: &mut [SystemdUnit], unit_type: UnitType, user_mode: bool) {
+    let states = fetch_unit_file_states(unit_type, user_mode);
+    for unit in units.iter_mut() {
+        if let Some(state) = states.get(&unit.unit) {
+            unit.file_state = Some(state.clone());
+        }
+    }
+}
+
+pub fn fetch_unit_properties(unit_name: &str, user_mode: bool) -> UnitProperties {
+    let mut args = Vec::new();
+    if user_mode {
+        args.push("--user");
+    }
+    args.extend(["show", unit_name, "--no-pager"]);
+
+    let Ok(output) = Command::new("systemctl").args(&args).output() else {
+        return UnitProperties::default();
+    };
+    if !output.status.success() {
+        return UnitProperties::default();
+    }
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let map: HashMap<&str, &str> = stdout
+        .lines()
+        .filter_map(|line| line.split_once('='))
+        .collect();
+
+    let get = |key: &str| -> String {
+        map.get(key).unwrap_or(&"").to_string()
+    };
+
+    let parse_optional_u64 = |key: &str| -> Option<u64> {
+        let val = map.get(key).unwrap_or(&"");
+        if val.is_empty() || *val == "[not set]" || *val == "infinity" {
+            None
+        } else {
+            val.parse::<u64>().ok()
+        }
+    };
+
+    let split_deps = |key: &str| -> Vec<String> {
+        let val = map.get(key).unwrap_or(&"");
+        if val.is_empty() {
+            Vec::new()
+        } else {
+            val.split_whitespace().map(|s| s.to_string()).collect()
+        }
+    };
+
+    UnitProperties {
+        fragment_path: get("FragmentPath"),
+        unit_file_state: get("UnitFileState"),
+        active_state: get("ActiveState"),
+        sub_state: get("SubState"),
+        load_state: get("LoadState"),
+        description: get("Description"),
+        main_pid: map
+            .get("MainPID")
+            .unwrap_or(&"0")
+            .parse::<u32>()
+            .unwrap_or(0),
+        exec_main_start_timestamp: get("ExecMainStartTimestamp"),
+        memory_current: parse_optional_u64("MemoryCurrent"),
+        cpu_usage_nsec: parse_optional_u64("CPUUsageNSec"),
+        requires: split_deps("Requires"),
+        wants: split_deps("Wants"),
+        after: split_deps("After"),
+        before: split_deps("Before"),
+        conflicts: split_deps("Conflicts"),
+        triggered_by: split_deps("TriggeredBy"),
+        triggers: split_deps("Triggers"),
+    }
+}
+
+pub fn format_bytes(bytes: u64) -> String {
+    const KB: u64 = 1024;
+    const MB: u64 = 1024 * KB;
+    const GB: u64 = 1024 * MB;
+
+    if bytes >= GB {
+        format!("{:.1} GB", bytes as f64 / GB as f64)
+    } else if bytes >= MB {
+        format!("{:.1} MB", bytes as f64 / MB as f64)
+    } else if bytes >= KB {
+        format!("{:.1} KB", bytes as f64 / KB as f64)
+    } else {
+        format!("{} B", bytes)
+    }
+}
+
+pub fn format_cpu_time(nsec: u64) -> String {
+    let secs = nsec as f64 / 1_000_000_000.0;
+    if secs >= 60.0 {
+        format!("{:.1}min", secs / 60.0)
+    } else {
+        format!("{:.3}s", secs)
     }
 }

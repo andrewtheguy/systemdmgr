@@ -8,8 +8,8 @@ use ratatui::{
 
 use crate::app::App;
 use crate::service::{
-    format_log_timestamp, priority_label, LogEntry, TimeRange, PRIORITY_LABELS, TIME_RANGES,
-    UNIT_TYPES,
+    format_bytes, format_cpu_time, format_log_timestamp, priority_label, LogEntry, TimeRange,
+    FILE_STATE_OPTIONS, PRIORITY_LABELS, TIME_RANGES, UNIT_TYPES,
 };
 
 /// Layout regions for mouse hit testing
@@ -102,13 +102,16 @@ pub fn render(frame: &mut Frame, app: &mut App) {
         Paragraph::new(search_text)
             .style(Style::default().fg(Color::Yellow))
             .block(Block::default().borders(Borders::ALL).title("Search"))
-    } else if !app.search_query.is_empty() || app.status_filter.is_some() {
+    } else if !app.search_query.is_empty() || app.status_filter.is_some() || app.file_state_filter.is_some() {
         let mut info_parts = Vec::new();
         if !app.search_query.is_empty() {
             info_parts.push(format!("Search: {}", app.search_query));
         }
         if let Some(ref status) = app.status_filter {
             info_parts.push(format!("Status: {}", status));
+        }
+        if let Some(ref fs) = app.file_state_filter {
+            info_parts.push(format!("File state: {}", fs));
         }
         let info = format!("{} ({} matches)", info_parts.join(" | "), app.filtered_indices.len());
         Paragraph::new(info)
@@ -148,12 +151,18 @@ pub fn render(frame: &mut Frame, app: &mut App) {
                         Style::default().fg(Color::DarkGray),
                     ));
                 }
+                if let Some(ref fs) = unit.file_state {
+                    spans.push(Span::styled(
+                        format!("  [{}]", fs),
+                        Style::default().fg(file_state_color(fs)),
+                    ));
+                }
                 ListItem::new(Line::from(spans))
             })
             .collect();
 
         let type_label = app.unit_type.label();
-        let title = if app.search_query.is_empty() && app.status_filter.is_none() {
+        let title = if app.search_query.is_empty() && app.status_filter.is_none() && app.file_state_filter.is_none() {
             format!("{} ({})", type_label, app.services.len())
         } else {
             format!(
@@ -247,15 +256,15 @@ pub fn render(frame: &mut Frame, app: &mut App) {
     let footer_text = if app.log_search_mode {
         "Type to search logs | Esc/Enter: Exit search | ?: Help"
     } else if app.show_logs && !app.log_search_query.is_empty() {
-        "l: Exit logs | j/k: Scroll | n/N: Next/Prev match | p: Priority | T: Time | t: Type | u: User/System | Esc: Clear | ?: Help"
+        "l: Exit logs | j/k: Scroll | n/N: Next/Prev match | i: Details | f: File state | p: Priority | T: Time | ?: Help"
     } else if app.show_logs {
-        "l: Exit logs | j/k: Scroll | g/G: Top/Bottom | /: Search logs | p: Priority | T: Time | t: Type | u: User/System | ?: Help"
+        "l: Exit logs | j/k: Scroll | g/G: Top/Bottom | /: Search | i: Details | f: File state | p: Priority | T: Time | ?: Help"
     } else if app.search_mode {
         "Type to search | Esc/Enter: Exit search | ?: Help"
-    } else if !app.search_query.is_empty() || app.status_filter.is_some() {
-        "q: Quit | /: Search | s: Status | t: Type | l: Logs | p: Priority | T: Time | u: User/System | Esc: Clear | ?: Help"
+    } else if !app.search_query.is_empty() || app.status_filter.is_some() || app.file_state_filter.is_some() {
+        "q: Quit | /: Search | s: Status | f: File state | i: Details | t: Type | l: Logs | u: User/System | Esc: Clear | ?: Help"
     } else {
-        "q/Esc: Quit | /: Search | s: Status | t: Type | l: Logs | p: Priority | T: Time | u: User/System | ?: Help"
+        "q/Esc: Quit | /: Search | s: Status | f: File state | i: Details | t: Type | l: Logs | u: User/System | ?: Help"
     };
     let footer = Paragraph::new(footer_text)
         .style(Style::default().fg(Color::DarkGray))
@@ -280,6 +289,16 @@ pub fn render(frame: &mut Frame, app: &mut App) {
     // Time range picker overlay
     if app.show_time_picker {
         render_time_picker(frame, app);
+    }
+
+    // File state picker overlay
+    if app.show_file_state_picker {
+        render_file_state_picker(frame, app);
+    }
+
+    // Details modal (on top of pickers)
+    if app.show_details {
+        render_details_modal(frame, app);
     }
 
     // Help overlay
@@ -435,10 +454,17 @@ fn render_help(frame: &mut Frame, app: &App) {
         Line::from(vec![Span::styled("Search & Filter", section_style)]),
         Line::from("  /             Start search"),
         Line::from("  s             Open status filter"),
+        Line::from("  f             Open file state filter"),
         Line::from("  t             Open unit type picker"),
         Line::from("  p             Log priority filter"),
         Line::from("  T             Log time range filter"),
         Line::from("  Esc           Clear search/filter"),
+        Line::from(""),
+        Line::from(vec![Span::styled("Unit Details", section_style)]),
+        Line::from("  i / Enter     Open details modal"),
+        Line::from("  j/k           Scroll details"),
+        Line::from("  g/G           Top/Bottom of details"),
+        Line::from("  Esc/i/Enter   Close details"),
         Line::from(""),
         Line::from(vec![Span::styled("Logs Panel", section_style)]),
         Line::from("  l             Toggle logs panel"),
@@ -708,4 +734,229 @@ pub fn get_services_visible_lines(frame: &Frame, show_logs: bool) -> usize {
     };
 
     services_area.height.saturating_sub(2) as usize
+}
+
+/// Returns the number of visible lines in the details modal
+pub fn get_details_visible_lines(frame: &Frame) -> usize {
+    let area = centered_rect(70, 80, frame.area());
+    // Subtract 2 for borders
+    area.height.saturating_sub(2) as usize
+}
+
+fn file_state_color(state: &str) -> Color {
+    match state {
+        "enabled" => Color::Green,
+        "disabled" => Color::Yellow,
+        "static" => Color::DarkGray,
+        "masked" => Color::Red,
+        "indirect" => Color::Cyan,
+        _ => Color::White,
+    }
+}
+
+fn render_file_state_picker(frame: &mut Frame, app: &mut App) {
+    let items: Vec<ListItem> = FILE_STATE_OPTIONS
+        .iter()
+        .map(|&opt| {
+            let color = match opt {
+                "All" => Color::Cyan,
+                other => file_state_color(other),
+            };
+            let is_active = match (&app.file_state_filter, opt) {
+                (None, "All") => true,
+                (Some(f), o) => f == o,
+                _ => false,
+            };
+            let marker = if is_active { " *" } else { "" };
+            let text = format!("  {}{}", opt, marker);
+            ListItem::new(text).style(Style::default().fg(color))
+        })
+        .collect();
+
+    let list = List::new(items)
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .title("File State Filter")
+                .style(Style::default().bg(Color::Black)),
+        )
+        .highlight_style(
+            Style::default()
+                .bg(Color::DarkGray)
+                .add_modifier(Modifier::BOLD),
+        );
+
+    let area = centered_fixed_rect(30, FILE_STATE_OPTIONS.len() as u16 + 2, frame.area());
+    frame.render_widget(Clear, area);
+    frame.render_stateful_widget(list, area, &mut app.file_state_picker_state);
+}
+
+fn render_details_modal(frame: &mut Frame, app: &mut App) {
+    let props = match &app.detail_properties {
+        Some(p) => p.clone(),
+        None => return,
+    };
+    let unit_name = app.detail_unit_name.clone().unwrap_or_default();
+
+    let mut lines: Vec<Line> = Vec::new();
+
+    let section_style = Style::default()
+        .fg(Color::Yellow)
+        .add_modifier(Modifier::BOLD);
+    let label_style = Style::default().fg(Color::Cyan);
+    let value_style = Style::default().fg(Color::White);
+
+    // General section
+    lines.push(Line::from(vec![Span::styled("General", section_style)]));
+    lines.push(Line::from(vec![
+        Span::styled("  Description:    ", label_style),
+        Span::styled(props.description.clone(), value_style),
+    ]));
+    if !props.fragment_path.is_empty() {
+        lines.push(Line::from(vec![
+            Span::styled("  Unit File:      ", label_style),
+            Span::styled(props.fragment_path.clone(), value_style),
+        ]));
+    }
+    if !props.unit_file_state.is_empty() {
+        lines.push(Line::from(vec![
+            Span::styled("  Enabled State:  ", label_style),
+            Span::styled(
+                props.unit_file_state.clone(),
+                Style::default().fg(file_state_color(&props.unit_file_state)),
+            ),
+        ]));
+    }
+    lines.push(Line::from(vec![
+        Span::styled("  Active State:   ", label_style),
+        Span::styled(
+            format!("{} ({})", props.active_state, props.sub_state),
+            value_style,
+        ),
+    ]));
+    lines.push(Line::from(vec![
+        Span::styled("  Load State:     ", label_style),
+        Span::styled(props.load_state.clone(), value_style),
+    ]));
+    lines.push(Line::from(""));
+
+    // Process section (only if PID > 0)
+    if props.main_pid > 0 {
+        lines.push(Line::from(vec![Span::styled("Process", section_style)]));
+        lines.push(Line::from(vec![
+            Span::styled("  Main PID:       ", label_style),
+            Span::styled(props.main_pid.to_string(), value_style),
+        ]));
+        if !props.exec_main_start_timestamp.is_empty() {
+            lines.push(Line::from(vec![
+                Span::styled("  Started:        ", label_style),
+                Span::styled(props.exec_main_start_timestamp.clone(), value_style),
+            ]));
+        }
+        lines.push(Line::from(""));
+    }
+
+    // Resources section (only if any data)
+    if props.memory_current.is_some() || props.cpu_usage_nsec.is_some() {
+        lines.push(Line::from(vec![Span::styled("Resources", section_style)]));
+        if let Some(mem) = props.memory_current {
+            lines.push(Line::from(vec![
+                Span::styled("  Memory:         ", label_style),
+                Span::styled(format_bytes(mem), value_style),
+            ]));
+        }
+        if let Some(cpu) = props.cpu_usage_nsec {
+            lines.push(Line::from(vec![
+                Span::styled("  CPU Time:       ", label_style),
+                Span::styled(format_cpu_time(cpu), value_style),
+            ]));
+        }
+        lines.push(Line::from(""));
+    }
+
+    // Dependencies section
+    let dep_sections: Vec<(&str, &Vec<String>)> = vec![
+        ("Requires", &props.requires),
+        ("Wants", &props.wants),
+        ("After", &props.after),
+        ("Before", &props.before),
+        ("Conflicts", &props.conflicts),
+        ("TriggeredBy", &props.triggered_by),
+        ("Triggers", &props.triggers),
+    ];
+
+    let has_deps = dep_sections.iter().any(|(_, deps)| !deps.is_empty());
+    if has_deps {
+        lines.push(Line::from(vec![Span::styled(
+            "Dependencies",
+            section_style,
+        )]));
+        for (label, deps) in &dep_sections {
+            if deps.is_empty() {
+                continue;
+            }
+            render_dep_lines(&mut lines, label, deps, label_style, value_style);
+        }
+    }
+
+    // Store content height for scroll bounds
+    app.detail_content_height = lines.len();
+
+    let area = centered_rect(70, 80, frame.area());
+    let visible_height = area.height.saturating_sub(2) as usize;
+
+    let scroll_info = if lines.len() > visible_height {
+        let start = app.detail_scroll + 1;
+        let end = (app.detail_scroll + visible_height).min(lines.len());
+        format!(" [{}-{}/{}]", start, end, lines.len())
+    } else {
+        String::new()
+    };
+
+    let visible_lines: Vec<Line> = lines
+        .into_iter()
+        .skip(app.detail_scroll)
+        .take(visible_height)
+        .collect();
+
+    let title = format!(" {} {}", unit_name, scroll_info);
+
+    let paragraph = Paragraph::new(visible_lines)
+        .style(Style::default().fg(Color::White))
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .title(title)
+                .style(Style::default().bg(Color::Black)),
+        );
+
+    frame.render_widget(Clear, area);
+    frame.render_widget(paragraph, area);
+}
+
+fn render_dep_lines<'a>(
+    lines: &mut Vec<Line<'a>>,
+    label: &str,
+    deps: &[String],
+    label_style: Style,
+    value_style: Style,
+) {
+    let joined = deps.join(", ");
+    if joined.len() <= 50 {
+        lines.push(Line::from(vec![
+            Span::styled(format!("  {:16}", format!("{}:", label)), label_style),
+            Span::styled(joined, value_style),
+        ]));
+    } else {
+        lines.push(Line::from(vec![Span::styled(
+            format!("  {}:", label),
+            label_style,
+        )]));
+        for dep in deps {
+            lines.push(Line::from(vec![
+                Span::raw("    "),
+                Span::styled(dep.clone(), value_style),
+            ]));
+        }
+    }
 }

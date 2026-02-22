@@ -30,10 +30,11 @@ fn main() -> io::Result<()> {
 
         match event::read()? {
             Event::Key(key) if key.kind == KeyEventKind::Press => {
-            // Help can be toggled from anywhere (except status picker)
+            // Help can be toggled from anywhere (except modals)
             if key.code == KeyCode::Char('?')
                 && !app.show_status_picker && !app.show_type_picker
                 && !app.show_priority_picker && !app.show_time_picker
+                && !app.show_details && !app.show_file_state_picker
             {
                 app.toggle_help();
                 continue;
@@ -88,6 +89,35 @@ fn main() -> io::Result<()> {
                     KeyCode::Down | KeyCode::Char('j') => app.time_picker_next(),
                     KeyCode::Up | KeyCode::Char('k') => app.time_picker_previous(),
                     KeyCode::Enter => app.time_picker_confirm(),
+                    _ => {}
+                }
+                continue;
+            }
+
+            // File state picker modal
+            if app.show_file_state_picker {
+                match key.code {
+                    KeyCode::Esc | KeyCode::Char('f') => app.close_file_state_picker(),
+                    KeyCode::Down | KeyCode::Char('j') => app.file_state_picker_next(),
+                    KeyCode::Up | KeyCode::Char('k') => app.file_state_picker_previous(),
+                    KeyCode::Enter => app.file_state_picker_confirm(),
+                    _ => {}
+                }
+                continue;
+            }
+
+            // Details modal
+            if app.show_details {
+                let visible = ui::get_details_visible_lines(&terminal.get_frame());
+                let content_height = app.detail_content_height;
+                match key.code {
+                    KeyCode::Esc | KeyCode::Char('i') | KeyCode::Enter => app.close_details(),
+                    KeyCode::Down | KeyCode::Char('j') => app.detail_scroll_down(1, content_height, visible),
+                    KeyCode::Up | KeyCode::Char('k') => app.detail_scroll_up(1),
+                    KeyCode::Char('g') | KeyCode::Home => { app.detail_scroll = 0; }
+                    KeyCode::Char('G') | KeyCode::End => app.detail_scroll_down(usize::MAX, content_height, visible),
+                    KeyCode::PageDown => app.detail_scroll_down(10, content_height, visible),
+                    KeyCode::PageUp => app.detail_scroll_up(10),
                     _ => {}
                 }
                 continue;
@@ -209,6 +239,12 @@ fn main() -> io::Result<()> {
                     KeyCode::Char('T') => {
                         app.open_time_picker();
                     }
+                    KeyCode::Char('i') | KeyCode::Enter => {
+                        app.open_details();
+                    }
+                    KeyCode::Char('f') => {
+                        app.open_file_state_picker();
+                    }
                     _ => {}
                 }
             } else {
@@ -258,6 +294,12 @@ fn main() -> io::Result<()> {
                     KeyCode::Char('T') => {
                         app.open_time_picker();
                     }
+                    KeyCode::Char('i') | KeyCode::Enter => {
+                        app.open_details();
+                    }
+                    KeyCode::Char('f') => {
+                        app.open_file_state_picker();
+                    }
                     KeyCode::PageUp => {
                         app.page_up(visible_services);
                     }
@@ -293,9 +335,10 @@ fn main() -> io::Result<()> {
 }
 
 fn handle_mouse_event(app: &mut App, mouse: MouseEvent, frame_size: Rect) {
-    // Don't handle mouse events when help or picker is shown
+    // Don't handle mouse events when help or modal is shown
     if app.show_help || app.show_status_picker || app.show_type_picker
         || app.show_priority_picker || app.show_time_picker
+        || app.show_details || app.show_file_state_picker
     {
         return;
     }
