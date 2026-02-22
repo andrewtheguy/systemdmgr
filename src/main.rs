@@ -35,6 +35,7 @@ fn main() -> io::Result<()> {
                 && !app.show_status_picker && !app.show_type_picker
                 && !app.show_priority_picker && !app.show_time_picker
                 && !app.show_details && !app.show_file_state_picker
+                && !app.show_action_picker && !app.show_confirm
             {
                 app.toggle_help();
                 continue;
@@ -101,6 +102,28 @@ fn main() -> io::Result<()> {
                     KeyCode::Down | KeyCode::Char('j') => app.file_state_picker_next(),
                     KeyCode::Up | KeyCode::Char('k') => app.file_state_picker_previous(),
                     KeyCode::Enter => app.file_state_picker_confirm(),
+                    _ => {}
+                }
+                continue;
+            }
+
+            // Action picker modal
+            if app.show_action_picker {
+                match key.code {
+                    KeyCode::Esc | KeyCode::Char('x') => app.close_action_picker(),
+                    KeyCode::Down | KeyCode::Char('j') => app.action_picker_next(),
+                    KeyCode::Up | KeyCode::Char('k') => app.action_picker_previous(),
+                    KeyCode::Enter => app.action_picker_confirm(),
+                    _ => {}
+                }
+                continue;
+            }
+
+            // Confirmation dialog modal
+            if app.show_confirm {
+                match key.code {
+                    KeyCode::Char('y') | KeyCode::Char('Y') => app.confirm_yes(),
+                    KeyCode::Char('n') | KeyCode::Char('N') | KeyCode::Esc => app.confirm_no(),
                     _ => {}
                 }
                 continue;
@@ -245,6 +268,16 @@ fn main() -> io::Result<()> {
                     KeyCode::Char('f') => {
                         app.open_file_state_picker();
                     }
+                    KeyCode::Char('x') => {
+                        app.clear_status_message();
+                        app.open_action_picker();
+                    }
+                    KeyCode::Char('R') => {
+                        app.clear_status_message();
+                        app.confirm_action = Some(service::UnitAction::DaemonReload);
+                        app.confirm_unit_name = Some(String::new());
+                        app.show_confirm = true;
+                    }
                     _ => {}
                 }
             } else {
@@ -300,6 +333,16 @@ fn main() -> io::Result<()> {
                     KeyCode::Char('f') => {
                         app.open_file_state_picker();
                     }
+                    KeyCode::Char('x') => {
+                        app.clear_status_message();
+                        app.open_action_picker();
+                    }
+                    KeyCode::Char('R') => {
+                        app.clear_status_message();
+                        app.confirm_action = Some(service::UnitAction::DaemonReload);
+                        app.confirm_unit_name = Some(String::new());
+                        app.show_confirm = true;
+                    }
                     KeyCode::PageUp => {
                         app.page_up(visible_services);
                     }
@@ -339,6 +382,7 @@ fn handle_mouse_event(app: &mut App, mouse: MouseEvent, frame_size: Rect) {
     if app.show_help || app.show_status_picker || app.show_type_picker
         || app.show_priority_picker || app.show_time_picker
         || app.show_details || app.show_file_state_picker
+        || app.show_action_picker || app.show_confirm
     {
         return;
     }

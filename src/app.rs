@@ -3,8 +3,9 @@ use std::collections::HashMap;
 use ratatui::widgets::ListState;
 
 use crate::service::{
-    fetch_log_entries, fetch_unit_properties, fetch_units, LogEntry, SystemdUnit, TimeRange,
-    UnitProperties, UnitType, FILE_STATE_OPTIONS, UNIT_TYPES, TIME_RANGES,
+    execute_unit_action, fetch_log_entries, fetch_unit_properties, fetch_units, LogEntry,
+    SystemdUnit, TimeRange, UnitAction, UnitProperties, UnitType, FILE_STATE_OPTIONS, TIME_RANGES,
+    UNIT_TYPES,
 };
 
 pub struct App {
@@ -49,6 +50,14 @@ pub struct App {
     pub file_state_filter: Option<String>,
     pub show_file_state_picker: bool,
     pub file_state_picker_state: ListState,
+    // Unit actions
+    pub show_action_picker: bool,
+    pub action_picker_state: ListState,
+    pub available_actions: Vec<UnitAction>,
+    pub show_confirm: bool,
+    pub confirm_action: Option<UnitAction>,
+    pub confirm_unit_name: Option<String>,
+    pub status_message: Option<String>,
 }
 
 impl App {
@@ -93,6 +102,13 @@ impl App {
             file_state_filter: None,
             show_file_state_picker: false,
             file_state_picker_state: ListState::default(),
+            show_action_picker: false,
+            action_picker_state: ListState::default(),
+            available_actions: Vec::new(),
+            show_confirm: false,
+            confirm_action: None,
+            confirm_unit_name: None,
+            status_message: None,
         };
         app.load_services();
         app
@@ -622,12 +638,99 @@ impl App {
         }
         self.show_file_state_picker = false;
     }
+
+    // Unit action picker methods
+
+    pub fn open_action_picker(&mut self) {
+        if let Some(unit) = self.selected_unit() {
+            let sub = unit.sub.clone();
+            let file_state = unit.file_state.clone();
+            self.available_actions =
+                UnitAction::available_actions(&sub, file_state.as_deref());
+            if !self.available_actions.is_empty() {
+                self.action_picker_state.select(Some(0));
+                self.show_action_picker = true;
+            }
+        }
+    }
+
+    pub fn close_action_picker(&mut self) {
+        self.show_action_picker = false;
+    }
+
+    pub fn action_picker_next(&mut self) {
+        let len = self.available_actions.len();
+        if len == 0 {
+            return;
+        }
+        let i = self.action_picker_state.selected().unwrap_or(0);
+        let next = (i + 1) % len;
+        self.action_picker_state.select(Some(next));
+    }
+
+    pub fn action_picker_previous(&mut self) {
+        let len = self.available_actions.len();
+        if len == 0 {
+            return;
+        }
+        let i = self.action_picker_state.selected().unwrap_or(0);
+        let prev = if i == 0 { len - 1 } else { i - 1 };
+        self.action_picker_state.select(Some(prev));
+    }
+
+    pub fn action_picker_confirm(&mut self) {
+        if let Some(i) = self.action_picker_state.selected()
+            && let Some(&action) = self.available_actions.get(i)
+        {
+            let unit_name = self
+                .selected_unit()
+                .map(|u| u.unit.clone())
+                .unwrap_or_default();
+            self.confirm_action = Some(action);
+            self.confirm_unit_name = Some(unit_name);
+            self.show_action_picker = false;
+            self.show_confirm = true;
+        }
+    }
+
+    pub fn confirm_yes(&mut self) {
+        if let (Some(action), Some(unit_name)) = (self.confirm_action, &self.confirm_unit_name)
+        {
+            let unit_name = unit_name.clone();
+            match execute_unit_action(action, &unit_name, self.user_mode) {
+                Ok(msg) => {
+                    self.status_message = Some(msg);
+                    self.error = None;
+                }
+                Err(e) => {
+                    self.error = Some(e);
+                }
+            }
+            self.load_services();
+            if self.show_logs {
+                self.mark_logs_dirty();
+            }
+        }
+        self.show_confirm = false;
+        self.confirm_action = None;
+        self.confirm_unit_name = None;
+    }
+
+    pub fn confirm_no(&mut self) {
+        self.show_confirm = false;
+        self.confirm_action = None;
+        self.confirm_unit_name = None;
+    }
+
+    pub fn clear_status_message(&mut self) {
+        self.status_message = None;
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::service::{LogEntry, SystemdUnit, UnitProperties, UnitType, TimeRange};
+    use crate::service::{LogEntry, SystemdUnit, UnitAction, UnitProperties, UnitType, TimeRange};
 
     fn make_unit(name: &str, sub: &str, desc: &str, file_state: Option<&str>) -> SystemdUnit {
         SystemdUnit {
@@ -693,6 +796,13 @@ mod tests {
             file_state_filter: None,
             show_file_state_picker: false,
             file_state_picker_state: ListState::default(),
+            show_action_picker: false,
+            action_picker_state: ListState::default(),
+            available_actions: Vec::new(),
+            show_confirm: false,
+            confirm_action: None,
+            confirm_unit_name: None,
+            status_message: None,
         };
         if !app.filtered_indices.is_empty() {
             app.list_state.select(Some(0));
@@ -1735,5 +1845,121 @@ mod tests {
         assert!(!app.log_filters_dirty);
         app.mark_logs_dirty();
         assert!(app.log_filters_dirty);
+    }
+
+    // Unit action picker
+
+    #[test]
+    fn test_open_action_picker_running() {
+        let mut app = test_app_with_services(vec![
+            make_unit("test.service", "running", "Test", Some("enabled")),
+        ]);
+        app.open_action_picker();
+        assert!(app.show_action_picker);
+        assert!(!app.available_actions.is_empty());
+        assert_eq!(app.action_picker_state.selected(), Some(0));
+        assert!(app.available_actions.contains(&UnitAction::Stop));
+        assert!(app.available_actions.contains(&UnitAction::Restart));
+        assert!(app.available_actions.contains(&UnitAction::Disable));
+    }
+
+    #[test]
+    fn test_open_action_picker_dead() {
+        let mut app = test_app_with_services(vec![
+            make_unit("test.service", "dead", "Test", Some("disabled")),
+        ]);
+        app.open_action_picker();
+        assert!(app.show_action_picker);
+        assert!(app.available_actions.contains(&UnitAction::Start));
+        assert!(app.available_actions.contains(&UnitAction::Enable));
+    }
+
+    #[test]
+    fn test_open_action_picker_no_selection() {
+        let mut app = test_app_empty();
+        app.open_action_picker();
+        assert!(!app.show_action_picker);
+    }
+
+    #[test]
+    fn test_close_action_picker() {
+        let mut app = test_app_with_subs(&["running"]);
+        app.open_action_picker();
+        assert!(app.show_action_picker);
+        app.close_action_picker();
+        assert!(!app.show_action_picker);
+    }
+
+    #[test]
+    fn test_action_picker_next() {
+        let mut app = test_app_with_subs(&["running"]);
+        app.open_action_picker();
+        assert_eq!(app.action_picker_state.selected(), Some(0));
+        app.action_picker_next();
+        assert_eq!(app.action_picker_state.selected(), Some(1));
+    }
+
+    #[test]
+    fn test_action_picker_next_wraps() {
+        let mut app = test_app_with_subs(&["running"]);
+        app.open_action_picker();
+        let last = app.available_actions.len() - 1;
+        app.action_picker_state.select(Some(last));
+        app.action_picker_next();
+        assert_eq!(app.action_picker_state.selected(), Some(0));
+    }
+
+    #[test]
+    fn test_action_picker_previous() {
+        let mut app = test_app_with_subs(&["running"]);
+        app.open_action_picker();
+        app.action_picker_state.select(Some(2));
+        app.action_picker_previous();
+        assert_eq!(app.action_picker_state.selected(), Some(1));
+    }
+
+    #[test]
+    fn test_action_picker_previous_wraps() {
+        let mut app = test_app_with_subs(&["running"]);
+        app.open_action_picker();
+        app.action_picker_state.select(Some(0));
+        app.action_picker_previous();
+        assert_eq!(
+            app.action_picker_state.selected(),
+            Some(app.available_actions.len() - 1)
+        );
+    }
+
+    #[test]
+    fn test_action_picker_confirm_opens_confirm() {
+        let mut app = test_app_with_services(vec![
+            make_unit("test.service", "running", "Test", None),
+        ]);
+        app.open_action_picker();
+        app.action_picker_confirm();
+        assert!(!app.show_action_picker);
+        assert!(app.show_confirm);
+        assert!(app.confirm_action.is_some());
+        assert_eq!(app.confirm_unit_name.as_deref(), Some("test.service"));
+    }
+
+    #[test]
+    fn test_confirm_no_clears_state() {
+        let mut app = test_app_with_subs(&["running"]);
+        app.show_confirm = true;
+        app.confirm_action = Some(UnitAction::Stop);
+        app.confirm_unit_name = Some("test.service".into());
+        app.confirm_no();
+        assert!(!app.show_confirm);
+        assert!(app.confirm_action.is_none());
+        assert!(app.confirm_unit_name.is_none());
+    }
+
+    #[test]
+    fn test_clear_status_message() {
+        let mut app = test_app_with_subs(&["running"]);
+        app.status_message = Some("Success".into());
+        app.clear_status_message();
+        assert!(app.status_message.is_none());
     }
 }

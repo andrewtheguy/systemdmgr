@@ -9,7 +9,7 @@ use ratatui::{
 use crate::app::App;
 use crate::service::{
     format_bytes, format_cpu_time, format_log_timestamp, priority_label, LogEntry, TimeRange,
-    FILE_STATE_OPTIONS, PRIORITY_LABELS, TIME_RANGES, UNIT_TYPES,
+    UnitAction, FILE_STATE_OPTIONS, PRIORITY_LABELS, TIME_RANGES, UNIT_TYPES,
 };
 
 /// Layout regions for mouse hit testing
@@ -116,6 +116,10 @@ pub fn render(frame: &mut Frame, app: &mut App) {
         let info = format!("{} ({} matches)", info_parts.join(" | "), app.filtered_indices.len());
         Paragraph::new(info)
             .style(Style::default().fg(Color::Green))
+            .block(Block::default().borders(Borders::ALL))
+    } else if let Some(ref msg) = app.status_message {
+        Paragraph::new(msg.as_str())
+            .style(Style::default().fg(Color::Green).add_modifier(Modifier::BOLD))
             .block(Block::default().borders(Borders::ALL))
     } else {
         let scope_label = if app.user_mode { "User" } else { "System" };
@@ -256,15 +260,15 @@ pub fn render(frame: &mut Frame, app: &mut App) {
     let footer_text = if app.log_search_mode {
         "Type to search logs | Esc/Enter: Exit search | ?: Help"
     } else if app.show_logs && !app.log_search_query.is_empty() {
-        "l: Exit logs | j/k: Scroll | n/N: Next/Prev match | i: Details | f: File state | p: Priority | T: Time | ?: Help"
+        "l: Exit logs | j/k: Scroll | n/N: Next/Prev match | x: Actions | i: Details | f: File state | p: Priority | T: Time | ?: Help"
     } else if app.show_logs {
-        "l: Exit logs | j/k: Scroll | g/G: Top/Bottom | /: Search | i: Details | f: File state | p: Priority | T: Time | ?: Help"
+        "l: Exit logs | j/k: Scroll | g/G: Top/Bottom | /: Search | x: Actions | i: Details | f: File state | p: Priority | T: Time | ?: Help"
     } else if app.search_mode {
         "Type to search | Esc/Enter: Exit search | ?: Help"
     } else if !app.search_query.is_empty() || app.status_filter.is_some() || app.file_state_filter.is_some() {
-        "q: Quit | /: Search | s: Status | f: File state | i: Details | t: Type | l: Logs | u: User/System | Esc: Clear | ?: Help"
+        "q: Quit | /: Search | s: Status | f: File state | x: Actions | i: Details | t: Type | l: Logs | u: User/System | Esc: Clear | ?: Help"
     } else {
-        "q/Esc: Quit | /: Search | s: Status | f: File state | i: Details | t: Type | l: Logs | u: User/System | ?: Help"
+        "q/Esc: Quit | /: Search | s: Status | f: File state | x: Actions | i: Details | t: Type | l: Logs | u: User/System | ?: Help"
     };
     let footer = Paragraph::new(footer_text)
         .style(Style::default().fg(Color::DarkGray))
@@ -294,6 +298,16 @@ pub fn render(frame: &mut Frame, app: &mut App) {
     // File state picker overlay
     if app.show_file_state_picker {
         render_file_state_picker(frame, app);
+    }
+
+    // Action picker overlay
+    if app.show_action_picker {
+        render_action_picker(frame, app);
+    }
+
+    // Confirmation dialog overlay
+    if app.show_confirm {
+        render_confirm_dialog(frame, app);
     }
 
     // Details modal (on top of pickers)
@@ -465,6 +479,10 @@ fn render_help(frame: &mut Frame, app: &App) {
         Line::from("  j/k           Scroll details"),
         Line::from("  g/G           Top/Bottom of details"),
         Line::from("  Esc/i/Enter   Close details"),
+        Line::from(""),
+        Line::from(vec![Span::styled("Unit Actions", section_style)]),
+        Line::from("  x             Open action picker"),
+        Line::from("  R             Daemon reload (direct)"),
         Line::from(""),
         Line::from(vec![Span::styled("Logs Panel", section_style)]),
         Line::from("  l             Toggle logs panel"),
@@ -789,6 +807,91 @@ fn render_file_state_picker(frame: &mut Frame, app: &mut App) {
     let area = centered_fixed_rect(30, FILE_STATE_OPTIONS.len() as u16 + 2, frame.area());
     frame.render_widget(Clear, area);
     frame.render_stateful_widget(list, area, &mut app.file_state_picker_state);
+}
+
+fn action_color(action: &UnitAction) -> Color {
+    match action {
+        UnitAction::Start => Color::Green,
+        UnitAction::Stop => Color::Red,
+        UnitAction::Restart => Color::Yellow,
+        UnitAction::Reload => Color::Cyan,
+        UnitAction::Enable => Color::Green,
+        UnitAction::Disable => Color::Yellow,
+        UnitAction::DaemonReload => Color::Magenta,
+    }
+}
+
+fn render_action_picker(frame: &mut Frame, app: &mut App) {
+    let unit_name = app
+        .selected_unit()
+        .map(|u| u.unit.clone())
+        .unwrap_or_default();
+
+    let items: Vec<ListItem> = app
+        .available_actions
+        .iter()
+        .map(|action| {
+            let text = format!("  {}", action.label());
+            ListItem::new(text).style(Style::default().fg(action_color(action)))
+        })
+        .collect();
+
+    let list = List::new(items)
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .title(format!("Actions: {}", unit_name))
+                .style(Style::default().bg(Color::Black)),
+        )
+        .highlight_style(
+            Style::default()
+                .bg(Color::DarkGray)
+                .add_modifier(Modifier::BOLD),
+        );
+
+    let area = centered_fixed_rect(40, app.available_actions.len() as u16 + 2, frame.area());
+    frame.render_widget(Clear, area);
+    frame.render_stateful_widget(list, area, &mut app.action_picker_state);
+}
+
+fn render_confirm_dialog(frame: &mut Frame, app: &App) {
+    let (action, unit_name) = match (&app.confirm_action, &app.confirm_unit_name) {
+        (Some(a), Some(n)) => (a, n),
+        _ => return,
+    };
+
+    let message = action.confirmation_message(unit_name);
+
+    let text = vec![
+        Line::from(""),
+        Line::from(vec![Span::styled(
+            message,
+            Style::default()
+                .fg(Color::Yellow)
+                .add_modifier(Modifier::BOLD),
+        )]),
+        Line::from(""),
+        Line::from(vec![
+            Span::styled("[Y]", Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)),
+            Span::raw(" Confirm  "),
+            Span::styled("[N/Esc]", Style::default().fg(Color::Red).add_modifier(Modifier::BOLD)),
+            Span::raw(" Cancel"),
+        ]),
+    ];
+
+    let paragraph = Paragraph::new(text)
+        .style(Style::default().fg(Color::White))
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .title("Confirm Action")
+                .style(Style::default().bg(Color::Black)),
+        )
+        .alignment(ratatui::layout::Alignment::Center);
+
+    let area = centered_fixed_rect(50, 6, frame.area());
+    frame.render_widget(Clear, area);
+    frame.render_widget(paragraph, area);
 }
 
 fn render_details_modal(frame: &mut Frame, app: &mut App) {

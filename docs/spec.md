@@ -2,7 +2,7 @@
 
 ## Overview
 
-systemdmgr is a terminal UI (TUI) for browsing and inspecting systemd units. It provides read-only access to unit listings, logs, and detailed properties — no write or mutating operations are supported.
+systemdmgr is a terminal UI (TUI) for browsing, inspecting, and managing systemd units. It provides access to unit listings, logs, detailed properties, and basic unit management actions (start/stop/restart/reload, enable/disable, daemon-reload).
 
 **Tech stack:**
 - Language: Rust
@@ -176,6 +176,34 @@ src/
 
 **Caching:** Properties cached per unit name per session. Cache cleared on refresh, scope switch, or type switch.
 
+### Unit Actions
+
+- Opened with `x` key — shows action picker popup with context-sensitive actions
+- Available actions depend on current unit state:
+  - Running/active/listening/waiting: Stop, Restart, Reload
+  - Dead/failed/inactive/exited: Start
+  - Unknown states: Start, Stop
+- Enable/Disable shown based on file state (enabled → Disable, disabled → Enable; static/masked/indirect → neither)
+- Daemon Reload always available
+- `R` key provides direct daemon-reload shortcut (skips action picker)
+- All actions require confirmation via `[Y]/[N/Esc]` dialog before execution
+- Executes via `systemctl [--user] <verb> [unit_name]`
+- On success: status message shown in header (green), unit list refreshed
+- On failure: error message shown, unit list refreshed
+- Status message clears on next key press
+
+**Action picker colors:**
+
+| Action | Color |
+|--------|-------|
+| Start | Green |
+| Stop | Red |
+| Restart | Yellow |
+| Reload | Cyan |
+| Enable | Green |
+| Disable | Yellow |
+| Daemon Reload | Magenta |
+
 ### Input
 
 **Keybindings:**
@@ -196,6 +224,8 @@ src/
 | `p` | Priority filter picker |
 | `T` | Time range filter picker |
 | `i`/`Enter` | Open unit details |
+| `x` | Open unit action picker |
+| `R` | Daemon reload (direct confirm) |
 | `l` | Toggle log panel |
 | `u` | Toggle user/system scope |
 | `r` | Refresh units |
@@ -206,7 +236,7 @@ src/
 - Left click to select unit in list
 - Scroll wheel to navigate list or scroll logs
 
-**Modals** block all other input until closed — status picker, type picker, priority picker, time picker, file state picker, details modal, help overlay.
+**Modals** block all other input until closed — status picker, type picker, priority picker, time picker, file state picker, action picker, confirmation dialog, details modal, help overlay.
 
 ## Feature Matrix
 
@@ -230,6 +260,10 @@ src/
 | Filter by log severity/priority | Yes | Yes |
 | Filter by time range | Yes | Yes |
 | Structured log metadata | Yes | Yes |
+| **Unit Management** | | |
+| Start / Stop / Restart / Reload | Yes | Yes |
+| Enable / Disable | Yes | Yes |
+| Daemon reload | Yes | Yes |
 | **Unit Details** | | |
 | Unit file path display | Yes | Yes |
 | Unit dependencies | Yes | Yes |

@@ -131,6 +131,101 @@ pub struct SystemdUnit {
 
 pub const FILE_STATE_OPTIONS: &[&str] = &["All", "enabled", "disabled", "static", "masked", "indirect"];
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum UnitAction {
+    Start,
+    Stop,
+    Restart,
+    Reload,
+    Enable,
+    Disable,
+    DaemonReload,
+}
+
+impl UnitAction {
+    pub fn label(&self) -> &'static str {
+        match self {
+            UnitAction::Start => "Start",
+            UnitAction::Stop => "Stop",
+            UnitAction::Restart => "Restart",
+            UnitAction::Reload => "Reload",
+            UnitAction::Enable => "Enable",
+            UnitAction::Disable => "Disable",
+            UnitAction::DaemonReload => "Daemon Reload",
+        }
+    }
+
+    pub fn systemctl_verb(&self) -> &'static str {
+        match self {
+            UnitAction::Start => "start",
+            UnitAction::Stop => "stop",
+            UnitAction::Restart => "restart",
+            UnitAction::Reload => "reload",
+            UnitAction::Enable => "enable",
+            UnitAction::Disable => "disable",
+            UnitAction::DaemonReload => "daemon-reload",
+        }
+    }
+
+    pub fn confirmation_message(&self, unit_name: &str) -> String {
+        match self {
+            UnitAction::DaemonReload => "Reload systemd daemon configuration?".to_string(),
+            _ => format!("{} {}?", self.label(), unit_name),
+        }
+    }
+
+    pub fn available_actions(sub_state: &str, file_state: Option<&str>) -> Vec<UnitAction> {
+        let mut actions = Vec::new();
+
+        match sub_state {
+            "running" | "active" | "listening" | "waiting" => {
+                actions.push(UnitAction::Stop);
+                actions.push(UnitAction::Restart);
+                actions.push(UnitAction::Reload);
+            }
+            "dead" | "failed" | "inactive" | "exited" => {
+                actions.push(UnitAction::Start);
+            }
+            _ => {
+                actions.push(UnitAction::Start);
+                actions.push(UnitAction::Stop);
+            }
+        }
+
+        match file_state {
+            Some("enabled") => actions.push(UnitAction::Disable),
+            Some("disabled") => actions.push(UnitAction::Enable),
+            _ => {}
+        }
+
+        actions.push(UnitAction::DaemonReload);
+        actions
+    }
+}
+
+pub fn execute_unit_action(action: UnitAction, unit_name: &str, user_mode: bool) -> Result<String, String> {
+    let mut args = Vec::new();
+    if user_mode {
+        args.push("--user");
+    }
+    args.push(action.systemctl_verb());
+    if action != UnitAction::DaemonReload {
+        args.push(unit_name);
+    }
+
+    let output = Command::new("systemctl")
+        .args(&args)
+        .output()
+        .map_err(|e| format!("Failed to execute systemctl: {}", e))?;
+
+    if output.status.success() {
+        Ok(format!("{} succeeded for {}", action.label(), unit_name))
+    } else {
+        let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+        Err(format!("{} failed: {}", action.label(), stderr.trim()))
+    }
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct UnitProperties {
     pub fragment_path: String,
@@ -998,6 +1093,187 @@ mod tests {
     #[test]
     fn test_format_cpu_time_90s() {
         assert_eq!(format_cpu_time(90_000_000_000), "1.5min");
+    }
+
+    // UnitAction — label
+
+    #[test]
+    fn test_unit_action_label_start() {
+        assert_eq!(UnitAction::Start.label(), "Start");
+    }
+
+    #[test]
+    fn test_unit_action_label_stop() {
+        assert_eq!(UnitAction::Stop.label(), "Stop");
+    }
+
+    #[test]
+    fn test_unit_action_label_restart() {
+        assert_eq!(UnitAction::Restart.label(), "Restart");
+    }
+
+    #[test]
+    fn test_unit_action_label_reload() {
+        assert_eq!(UnitAction::Reload.label(), "Reload");
+    }
+
+    #[test]
+    fn test_unit_action_label_enable() {
+        assert_eq!(UnitAction::Enable.label(), "Enable");
+    }
+
+    #[test]
+    fn test_unit_action_label_disable() {
+        assert_eq!(UnitAction::Disable.label(), "Disable");
+    }
+
+    #[test]
+    fn test_unit_action_label_daemon_reload() {
+        assert_eq!(UnitAction::DaemonReload.label(), "Daemon Reload");
+    }
+
+    // UnitAction — systemctl_verb
+
+    #[test]
+    fn test_unit_action_verb_start() {
+        assert_eq!(UnitAction::Start.systemctl_verb(), "start");
+    }
+
+    #[test]
+    fn test_unit_action_verb_stop() {
+        assert_eq!(UnitAction::Stop.systemctl_verb(), "stop");
+    }
+
+    #[test]
+    fn test_unit_action_verb_restart() {
+        assert_eq!(UnitAction::Restart.systemctl_verb(), "restart");
+    }
+
+    #[test]
+    fn test_unit_action_verb_reload() {
+        assert_eq!(UnitAction::Reload.systemctl_verb(), "reload");
+    }
+
+    #[test]
+    fn test_unit_action_verb_enable() {
+        assert_eq!(UnitAction::Enable.systemctl_verb(), "enable");
+    }
+
+    #[test]
+    fn test_unit_action_verb_disable() {
+        assert_eq!(UnitAction::Disable.systemctl_verb(), "disable");
+    }
+
+    #[test]
+    fn test_unit_action_verb_daemon_reload() {
+        assert_eq!(UnitAction::DaemonReload.systemctl_verb(), "daemon-reload");
+    }
+
+    // UnitAction — confirmation_message
+
+    #[test]
+    fn test_unit_action_confirm_msg_start() {
+        assert_eq!(
+            UnitAction::Start.confirmation_message("foo.service"),
+            "Start foo.service?"
+        );
+    }
+
+    #[test]
+    fn test_unit_action_confirm_msg_daemon_reload() {
+        assert_eq!(
+            UnitAction::DaemonReload.confirmation_message("foo.service"),
+            "Reload systemd daemon configuration?"
+        );
+    }
+
+    // UnitAction — available_actions
+
+    #[test]
+    fn test_available_actions_running() {
+        let actions = UnitAction::available_actions("running", None);
+        assert!(actions.contains(&UnitAction::Stop));
+        assert!(actions.contains(&UnitAction::Restart));
+        assert!(actions.contains(&UnitAction::Reload));
+        assert!(!actions.contains(&UnitAction::Start));
+        assert!(actions.contains(&UnitAction::DaemonReload));
+    }
+
+    #[test]
+    fn test_available_actions_dead() {
+        let actions = UnitAction::available_actions("dead", None);
+        assert!(actions.contains(&UnitAction::Start));
+        assert!(!actions.contains(&UnitAction::Stop));
+        assert!(actions.contains(&UnitAction::DaemonReload));
+    }
+
+    #[test]
+    fn test_available_actions_failed() {
+        let actions = UnitAction::available_actions("failed", None);
+        assert!(actions.contains(&UnitAction::Start));
+        assert!(!actions.contains(&UnitAction::Stop));
+    }
+
+    #[test]
+    fn test_available_actions_unknown_sub_state() {
+        let actions = UnitAction::available_actions("something-unknown", None);
+        assert!(actions.contains(&UnitAction::Start));
+        assert!(actions.contains(&UnitAction::Stop));
+        assert!(actions.contains(&UnitAction::DaemonReload));
+    }
+
+    #[test]
+    fn test_available_actions_enabled_file_state() {
+        let actions = UnitAction::available_actions("running", Some("enabled"));
+        assert!(actions.contains(&UnitAction::Disable));
+        assert!(!actions.contains(&UnitAction::Enable));
+    }
+
+    #[test]
+    fn test_available_actions_disabled_file_state() {
+        let actions = UnitAction::available_actions("dead", Some("disabled"));
+        assert!(actions.contains(&UnitAction::Enable));
+        assert!(!actions.contains(&UnitAction::Disable));
+    }
+
+    #[test]
+    fn test_available_actions_static_file_state() {
+        let actions = UnitAction::available_actions("running", Some("static"));
+        assert!(!actions.contains(&UnitAction::Enable));
+        assert!(!actions.contains(&UnitAction::Disable));
+    }
+
+    #[test]
+    fn test_available_actions_listening() {
+        let actions = UnitAction::available_actions("listening", None);
+        assert!(actions.contains(&UnitAction::Stop));
+        assert!(actions.contains(&UnitAction::Restart));
+    }
+
+    #[test]
+    fn test_available_actions_waiting() {
+        let actions = UnitAction::available_actions("waiting", None);
+        assert!(actions.contains(&UnitAction::Stop));
+        assert!(actions.contains(&UnitAction::Restart));
+    }
+
+    #[test]
+    fn test_available_actions_exited() {
+        let actions = UnitAction::available_actions("exited", None);
+        assert!(actions.contains(&UnitAction::Start));
+        assert!(!actions.contains(&UnitAction::Stop));
+    }
+
+    #[test]
+    fn test_available_actions_always_has_daemon_reload() {
+        for sub in &["running", "dead", "failed", "unknown", "listening"] {
+            let actions = UnitAction::available_actions(sub, None);
+            assert!(
+                actions.contains(&UnitAction::DaemonReload),
+                "DaemonReload missing for sub_state={}",
+                sub
+            );
+        }
     }
 
     // Phase 4 — FILE_STATE_OPTIONS
