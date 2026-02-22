@@ -70,7 +70,7 @@ systemdview (v0.0.1-alpha) is a terminal UI for browsing systemd services, built
 | **Status & Filtering** | | | |
 | Color-coded status display | Yes | Yes | Done |
 | Filter by runtime state (running/exited/failed/dead) | Yes | Yes | Done |
-| Filter by unit file state (enabled/disabled/static/masked) | Yes | No | Phase 4 |
+| Filter by unit file state (enabled/disabled/static/masked) | Yes | Yes | Done |
 | Search by name/description | Yes | Yes | Done |
 | **Log Viewing** | | | |
 | View unit logs | Yes | Yes | Done |
@@ -80,10 +80,10 @@ systemdview (v0.0.1-alpha) is a terminal UI for browsing systemd services, built
 | Structured log metadata (PID, priority, timestamp) | Yes | Yes | Done |
 | Real-time log streaming (follow) | Yes | No | Phase 5 |
 | **Unit Details** | | | |
-| Unit file path display | Yes | No | Phase 4 |
-| Unit dependencies (Requires/Wants/After/Before/Conflicts) | Yes | No | Phase 4 |
-| Auto-start / enabled state | Yes | No | Phase 4 |
-| Runtime properties (PID, memory, CPU) | Yes | No | Phase 4 |
+| Unit file path display | Yes | Yes | Done |
+| Unit dependencies (Requires/Wants/After/Before/Conflicts) | Yes | Yes | Done |
+| Auto-start / enabled state | Yes | Yes | Done |
+| Runtime properties (PID, memory, CPU) | Yes | Yes | Done |
 
 ## Roadmap
 
@@ -204,116 +204,33 @@ Adapt `App.update_filter()` (`src/app.rs:72-105`) — the status filter options 
 
 ---
 
-### Phase 4: Unit Details & Metadata
+### Phase 4: Unit Details & Metadata — Done
 
 **Goal:** Show detailed read-only information about a selected unit, including its file path, dependencies, enabled state, and runtime properties.
 
 **Features:**
 - Display unit file path
-- Show unit dependencies (Requires, Wants, After, Before, Conflicts)
+- Show unit dependencies (Requires, Wants, After, Before, Conflicts, TriggeredBy, Triggers)
 - Show unit file state (enabled, disabled, static, masked)
 - Show runtime properties (PID, memory, CPU time)
-- Filter units by unit file state (enabled/disabled/static/masked)
-- Dependency tree view
+- Filter units by unit file state (enabled/disabled/static/masked/indirect)
 
-**Implementation details:**
+**What was implemented:**
+- Added `file_state: Option<String>` field to `SystemdUnit`, populated via batch `systemctl list-unit-files --output=json` (`src/service.rs`)
+- Added `UnitProperties` struct with all unit detail fields (path, states, PID, timestamps, memory, CPU, dependencies)
+- Added `fetch_unit_properties()` parsing `systemctl show <unit>` key=value output into `UnitProperties` (`src/service.rs`)
+- Added `fetch_unit_file_states()` and `merge_file_states()` to batch-fetch and merge file states into unit list
+- Added `format_bytes()` and `format_cpu_time()` formatting helpers for human-readable resource display
+- Added scrollable details modal (`i`/`Enter` to open, `Esc`/`i`/`Enter` to close) with sections: General, Process, Resources, Dependencies (`src/ui.rs`)
+- Details modal uses `centered_rect(70, 80)` with scroll indicator `[1-20/35]` in title
+- Process section hidden when PID=0, Resources section hidden when no memory/CPU data
+- Dependencies displayed compact (comma-joined) when short, expanded (one per line) when long
+- Added file state filter picker (`f` key) with options: All, enabled, disabled, static, masked, indirect (`src/ui.rs`)
+- File state badges shown in unit list with color coding: green=enabled, yellow=disabled, gray=static, red=masked, cyan=indirect
+- Properties cached per session (cleared on refresh, mode switch, or type switch)
+- Updated footer and help overlay with `i`, `f` keybindings
 
-**Fetching unit properties:**
-
-Use `systemctl show <unit>` to retrieve all properties as key-value pairs:
-```
-systemctl show nginx.service --no-pager
-```
-
-This outputs lines like `Key=Value`. Parse into a `HashMap<String, String>`.
-
-Key properties to extract and display:
-
-| Property | Description | Example |
-|----------|-------------|---------|
-| `FragmentPath` | Unit file location | `/lib/systemd/system/nginx.service` |
-| `UnitFileState` | Enabled state | `enabled`, `disabled`, `static`, `masked` |
-| `ActiveState` | Current active state | `active`, `inactive`, `failed` |
-| `SubState` | Detailed sub-state | `running`, `dead`, `exited` |
-| `Description` | Unit description | `A high performance web server` |
-| `MainPID` | Main process ID | `1234` |
-| `MemoryCurrent` | Current memory usage (bytes) | `12345678` |
-| `CPUUsageNSec` | CPU time (nanoseconds) | `987654321` |
-| `Requires` | Hard dependencies | `sysinit.target system.slice` |
-| `Wants` | Soft dependencies | `network-online.target` |
-| `After` | Ordering (start after) | `network.target remote-fs.target` |
-| `Before` | Ordering (start before) | `multi-user.target` |
-| `Conflicts` | Conflicting units | `shutdown.target` |
-| `TriggeredBy` | Units that trigger this one | `nginx.socket` |
-| `Triggers` | Units this one triggers | (for timers/paths) |
-| `LoadState` | Load state | `loaded`, `not-found`, `error` |
-
-Add a `fetch_unit_properties(unit: &str, scope: UnitScope) -> HashMap<String, String>` function to `src/service.rs`.
-
-For user units: `systemctl --user show <unit> --no-pager`.
-
-**Details panel UI:**
-
-Two approaches:
-
-*Option A: Details modal* — reuse the `render_help` centered popup pattern (`src/ui.rs:307-369`). Toggle with `i` or `Enter`. Shows a scrollable list of properties grouped by section:
-
-```
-┌─ Unit Details: nginx.service ──────────────┐
-│                                             │
-│ General                                     │
-│   File:    /lib/systemd/system/nginx.service│
-│   State:   enabled                          │
-│   Active:  active (running)                 │
-│   PID:     1234                             │
-│                                             │
-│ Dependencies                                │
-│   Requires: sysinit.target system.slice     │
-│   Wants:    network-online.target           │
-│   After:    network.target remote-fs.target │
-│   Before:   multi-user.target               │
-│   Conflicts: shutdown.target                │
-│                                             │
-│ Resources                                   │
-│   Memory:  11.8 MB                          │
-│   CPU:     0.98s                            │
-└─────────────────────────────────────────────┘
-```
-
-*Option B: Details panel* — add a third panel in the layout. This is more complex as it changes the layout structure. The modal approach (Option A) is simpler and consistent with existing patterns.
-
-**Unit file state filter:**
-
-Extend `STATUS_OPTIONS` (`src/app.rs:5`) to include unit file state filtering. This could be a separate filter dimension (in addition to runtime status):
-
-Add a `file_state_filter: Option<String>` field to `App` with options: All, enabled, disabled, static, masked.
-
-This requires fetching `UnitFileState` for each unit. Two approaches:
-1. **Batch query:** `systemctl list-unit-files --type=service --output=json` returns unit name + state. Cross-reference with the unit list.
-2. **Per-unit query:** fetch properties for each unit on demand (slower, but avoids a separate command).
-
-The batch approach is more efficient:
-```
-systemctl list-unit-files --type=service --no-pager --output=json
-```
-Returns JSON with `unit_file` and `state` fields. Merge this into the `SystemdUnit` struct as `file_state: Option<String>`.
-
-**Dependency tree:**
-
-For a simple dependency tree view, recursively query dependencies:
-1. Get `Requires` and `Wants` from `systemctl show <unit>`
-2. For each dependency, fetch its state
-3. Display as an indented tree:
-
-```
-nginx.service (running)
-├── sysinit.target (active)
-├── system.slice (active)
-└── network-online.target (active)
-    └── network.target (active)
-```
-
-Limit depth to avoid circular dependencies (systemd allows cycles via `After`/`Before` ordering). Use a visited set to prevent infinite loops.
+---
 
 ### Phase 5: Real-Time Log Streaming
 
