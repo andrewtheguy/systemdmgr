@@ -1,7 +1,7 @@
 #!/bin/bash
 
-# systemdview installer for Linux
-# Downloads latest binary from: https://github.com/andrewtheguy/systemdview/releases
+# systemdmgr installer for Linux
+# Downloads latest binary from: https://github.com/andrewtheguy/systemdmgr/releases
 #
 # Usage: ./install.sh [RELEASE_TAG] [--prerelease]
 # Or set RELEASE_TAG environment variable
@@ -9,7 +9,7 @@
 set -e
 
 REPO_OWNER="andrewtheguy"
-REPO_NAME="systemdview"
+REPO_NAME="systemdmgr"
 DOWNLOAD_ONLY=false
 PREFER_PRERELEASE=false
 
@@ -190,7 +190,7 @@ detect_os() {
             ;;
         *)
             print_error "Unsupported operating system: $(uname -s)"
-            print_error "systemdview only supports Linux (it's a systemd viewer)"
+            print_error "systemdmgr only supports Linux (it's a systemd viewer)"
             exit 1
             ;;
     esac
@@ -216,7 +216,7 @@ detect_arch() {
 
 # Map OS and architecture to binary name
 get_binary_name() {
-    BINARY_NAME="systemdview-${OS}-${ARCH}"
+    BINARY_NAME="systemdmgr-${OS}-${ARCH}"
 }
 
 # Download binary
@@ -317,7 +317,7 @@ download_and_install() {
     local temp_dir
     temp_dir=$(mktemp -d)
     local temp_binary="${temp_dir}/${BINARY_NAME}"
-    local final_path="$HOME/.local/bin/systemdview"
+    local final_path="$HOME/.local/bin/systemdmgr"
 
     trap 'rm -rf "$temp_dir"' EXIT
 
@@ -345,7 +345,7 @@ download_and_install() {
 
         if [ -n "$profile" ]; then
             print_warn "${target_dir} is not in your current PATH, but is configured in your profile."
-            print_warn "To use systemdview now, reload your profile:"
+            print_warn "To use systemdmgr now, reload your profile:"
             echo ""
             echo "    source $profile"
             echo ""
@@ -365,7 +365,7 @@ download_and_install() {
 show_usage() {
     echo "Usage: $0 [OPTIONS] [RELEASE_TAG]"
     echo ""
-    echo "Download and install systemdview binary"
+    echo "Download and install systemdmgr binary"
     echo ""
     echo "Options:"
     echo "  --download-only  Download binary to current directory without installing"
@@ -387,9 +387,9 @@ show_usage() {
 # Main installation function
 install() {
     if [ "$DOWNLOAD_ONLY" = true ]; then
-        print_info "systemdview downloader"
+        print_info "systemdmgr downloader"
     else
-        print_info "systemdview installer"
+        print_info "systemdmgr installer"
     fi
     print_info "Release: ${RELEASE_TAG}"
     print_info "Repository: ${REPO_OWNER}/${REPO_NAME}"
@@ -421,7 +421,7 @@ install() {
     else
         download_and_install
         print_info "Installation completed successfully!"
-        print_info "You can now run 'systemdview' from your terminal."
+        print_info "You can now run 'systemdmgr' from your terminal."
     fi
 }
 
@@ -437,9 +437,9 @@ main() {
     parse_args "$@"
 
     if [ "$DOWNLOAD_ONLY" = true ]; then
-        print_info "Starting systemdview download..."
+        print_info "Starting systemdmgr download..."
     else
-        print_info "Starting systemdview installation..."
+        print_info "Starting systemdmgr installation..."
         check_privileges
     fi
 

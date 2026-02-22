@@ -1252,7 +1252,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "systemdview"
+name = "systemdmgr"
 version = "0.0.1-alpha"
 dependencies = [
  "chrono",

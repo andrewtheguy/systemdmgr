@@ -1,4 +1,4 @@
-# systemdview Roadmap
+# systemdmgr Roadmap
 
 ## Planned Features
 
@@ -25,7 +25,7 @@
 
 ## Out of Scope
 
-These features are excluded from systemdview's scope.
+These features are excluded from systemdmgr's scope.
 
 ### Write/Mutating Operations
 
@@ -38,7 +38,7 @@ These features are excluded from systemdview's scope.
 
 ### Non-Unit-Management Features
 
-- Web-based remote access (Cockpit is a web server; systemdview is a local TUI)
+- Web-based remote access (Cockpit is a web server; systemdmgr is a local TUI)
 - Hostname configuration (`hostnamed`)
 - Time/timezone management (`timedated`)
 - NTP server management

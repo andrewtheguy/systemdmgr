@@ -1,4 +1,4 @@
-# systemdview
+# systemdmgr
 
 A terminal UI for viewing and browsing systemd services.
 
@@ -20,13 +20,13 @@ A terminal UI for viewing and browsing systemd services.
 ### Quick Install
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/andrewtheguy/systemdview/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/andrewtheguy/systemdmgr/main/install.sh | bash
 ```
 
 To install a prerelease version:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/andrewtheguy/systemdview/main/install.sh | bash -s -- --prerelease
+curl -fsSL https://raw.githubusercontent.com/andrewtheguy/systemdmgr/main/install.sh | bash -s -- --prerelease
 ```
 
 ### From Source
@@ -38,7 +38,7 @@ cargo install --path .
 ## Usage
 
 ```bash
-systemdview
+systemdmgr
 ```
 
 ## Keyboard Shortcuts

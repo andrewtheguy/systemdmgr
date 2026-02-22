@@ -61,13 +61,13 @@ jobs:
       - name: Rename Binary
         run: |
           mkdir -p target/release
-          mv target/${{ matrix.target }}/release/systemdview target/release/systemdview-${{ matrix.suffix }}
+          mv target/${{ matrix.target }}/release/systemdmgr target/release/systemdmgr-${{ matrix.suffix }}
 
       - name: Upload release artifact
         uses: actions/upload-artifact@v4
         with:
           name: release-${{ matrix.suffix }}
-          path: target/release/systemdview-${{ matrix.suffix }}
+          path: target/release/systemdmgr-${{ matrix.suffix }}
 
   create-release:
     needs: [setup, build-linux]

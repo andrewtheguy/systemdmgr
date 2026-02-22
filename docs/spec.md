@@ -1,8 +1,8 @@
-# systemdview Specification
+# systemdmgr Specification
 
 ## Overview
 
-systemdview is a terminal UI (TUI) for browsing and inspecting systemd units. It provides read-only access to unit listings, logs, and detailed properties — no write or mutating operations are supported.
+systemdmgr is a terminal UI (TUI) for browsing and inspecting systemd units. It provides read-only access to unit listings, logs, and detailed properties — no write or mutating operations are supported.
 
 **Tech stack:**
 - Language: Rust
@@ -210,7 +210,7 @@ src/
 
 ## Feature Matrix
 
-| Feature | Cockpit | systemdview |
+| Feature | Cockpit | systemdmgr |
 |---------|---------|-------------|
 | **Listing & Browsing** | | |
 | List system services | Yes | Yes |

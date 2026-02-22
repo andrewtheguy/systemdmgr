@@ -1,5 +1,5 @@
 [package]
-name = "systemdview"
+name = "systemdmgr"
 version = "0.0.1-alpha"
 edition = "2024"
 
