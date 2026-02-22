@@ -241,7 +241,7 @@ pub fn render(frame: &mut Frame, app: &mut App) {
                     .timestamp
                     .map(|ts| format!(" · {}", format_log_timestamp(ts)))
                     .unwrap_or_default();
-                let label = format!(" Reboot {} {} ", short_id, boot_ts);
+                let label = format!(" Boot {} {} ", short_id, boot_ts);
                 let pad_total = content_width.saturating_sub(label.len());
                 let pad_left = pad_total / 2;
                 let pad_right = pad_total - pad_left;
