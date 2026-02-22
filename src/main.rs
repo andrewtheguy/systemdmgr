@@ -31,7 +31,10 @@ fn main() -> io::Result<()> {
         match event::read()? {
             Event::Key(key) if key.kind == KeyEventKind::Press => {
             // Help can be toggled from anywhere (except status picker)
-            if key.code == KeyCode::Char('?') && !app.show_status_picker {
+            if key.code == KeyCode::Char('?')
+                && !app.show_status_picker && !app.show_type_picker
+                && !app.show_priority_picker && !app.show_time_picker
+            {
                 app.toggle_help();
                 continue;
             }
@@ -61,6 +64,30 @@ fn main() -> io::Result<()> {
                     KeyCode::Down | KeyCode::Char('j') => app.type_picker_next(),
                     KeyCode::Up | KeyCode::Char('k') => app.type_picker_previous(),
                     KeyCode::Enter => app.type_picker_confirm(),
+                    _ => {}
+                }
+                continue;
+            }
+
+            // Priority picker modal
+            if app.show_priority_picker {
+                match key.code {
+                    KeyCode::Esc | KeyCode::Char('p') => app.close_priority_picker(),
+                    KeyCode::Down | KeyCode::Char('j') => app.priority_picker_next(),
+                    KeyCode::Up | KeyCode::Char('k') => app.priority_picker_previous(),
+                    KeyCode::Enter => app.priority_picker_confirm(),
+                    _ => {}
+                }
+                continue;
+            }
+
+            // Time range picker modal
+            if app.show_time_picker {
+                match key.code {
+                    KeyCode::Esc | KeyCode::Char('T') => app.close_time_picker(),
+                    KeyCode::Down | KeyCode::Char('j') => app.time_picker_next(),
+                    KeyCode::Up | KeyCode::Char('k') => app.time_picker_previous(),
+                    KeyCode::Enter => app.time_picker_confirm(),
                     _ => {}
                 }
                 continue;
@@ -176,6 +203,12 @@ fn main() -> io::Result<()> {
                     KeyCode::Char('t') => {
                         app.open_type_picker();
                     }
+                    KeyCode::Char('p') => {
+                        app.open_priority_picker();
+                    }
+                    KeyCode::Char('T') => {
+                        app.open_time_picker();
+                    }
                     _ => {}
                 }
             } else {
@@ -219,6 +252,12 @@ fn main() -> io::Result<()> {
                     KeyCode::Char('t') => {
                         app.open_type_picker();
                     }
+                    KeyCode::Char('p') => {
+                        app.open_priority_picker();
+                    }
+                    KeyCode::Char('T') => {
+                        app.open_time_picker();
+                    }
                     KeyCode::PageUp => {
                         app.page_up(visible_services);
                     }
@@ -255,7 +294,9 @@ fn main() -> io::Result<()> {
 
 fn handle_mouse_event(app: &mut App, mouse: MouseEvent, frame_size: Rect) {
     // Don't handle mouse events when help or picker is shown
-    if app.show_help || app.show_status_picker || app.show_type_picker {
+    if app.show_help || app.show_status_picker || app.show_type_picker
+        || app.show_priority_picker || app.show_time_picker
+    {
         return;
     }
 

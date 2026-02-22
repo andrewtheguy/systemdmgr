@@ -1,6 +1,9 @@
 use ratatui::widgets::ListState;
 
-use crate::service::{fetch_logs, fetch_units, SystemdUnit, UnitType, UNIT_TYPES};
+use crate::service::{
+    fetch_log_entries, fetch_units, LogEntry, SystemdUnit, TimeRange, UnitType, UNIT_TYPES,
+    TIME_RANGES,
+};
 
 pub struct App {
     pub services: Vec<SystemdUnit>,
@@ -10,7 +13,7 @@ pub struct App {
     pub search_query: String,
     pub search_mode: bool,
     pub filtered_indices: Vec<usize>,
-    pub logs: Vec<String>,
+    pub logs: Vec<LogEntry>,
     pub logs_scroll: usize,
     pub last_selected_service: Option<String>,
     pub status_filter: Option<String>,
@@ -26,6 +29,13 @@ pub struct App {
     pub unit_type: UnitType,
     pub show_type_picker: bool,
     pub type_picker_state: ListState,
+    pub log_priority_filter: Option<u8>,
+    pub log_time_range: TimeRange,
+    pub log_filters_dirty: bool,
+    pub show_priority_picker: bool,
+    pub priority_picker_state: ListState,
+    pub show_time_picker: bool,
+    pub time_picker_state: ListState,
 }
 
 impl App {
@@ -54,6 +64,13 @@ impl App {
             unit_type: UnitType::Service,
             show_type_picker: false,
             type_picker_state: ListState::default(),
+            log_priority_filter: None,
+            log_time_range: TimeRange::All,
+            log_filters_dirty: false,
+            show_priority_picker: false,
+            priority_picker_state: ListState::default(),
+            show_time_picker: false,
+            time_picker_state: ListState::default(),
         };
         app.load_services();
         app
@@ -198,10 +215,86 @@ impl App {
                 self.last_selected_service = None;
                 self.logs.clear();
                 self.clear_log_search();
+                self.log_priority_filter = None;
+                self.log_time_range = TimeRange::All;
                 self.load_services();
             }
         }
         self.show_type_picker = false;
+    }
+
+    pub fn open_priority_picker(&mut self) {
+        self.show_priority_picker = true;
+        let index = match self.log_priority_filter {
+            None => 0,
+            Some(p) => (p as usize) + 1,
+        };
+        self.priority_picker_state.select(Some(index));
+    }
+
+    pub fn close_priority_picker(&mut self) {
+        self.show_priority_picker = false;
+    }
+
+    pub fn priority_picker_next(&mut self) {
+        let len = 9; // All + 8 priority levels
+        let i = self.priority_picker_state.selected().unwrap_or(0);
+        let next = (i + 1) % len;
+        self.priority_picker_state.select(Some(next));
+    }
+
+    pub fn priority_picker_previous(&mut self) {
+        let len = 9;
+        let i = self.priority_picker_state.selected().unwrap_or(0);
+        let prev = if i == 0 { len - 1 } else { i - 1 };
+        self.priority_picker_state.select(Some(prev));
+    }
+
+    pub fn priority_picker_confirm(&mut self) {
+        if let Some(i) = self.priority_picker_state.selected() {
+            if i == 0 {
+                self.log_priority_filter = None;
+            } else {
+                self.log_priority_filter = Some((i - 1) as u8);
+            }
+            self.mark_logs_dirty();
+        }
+        self.show_priority_picker = false;
+    }
+
+    pub fn open_time_picker(&mut self) {
+        self.show_time_picker = true;
+        let index = TIME_RANGES
+            .iter()
+            .position(|&t| t == self.log_time_range)
+            .unwrap_or(0);
+        self.time_picker_state.select(Some(index));
+    }
+
+    pub fn close_time_picker(&mut self) {
+        self.show_time_picker = false;
+    }
+
+    pub fn time_picker_next(&mut self) {
+        let len = TIME_RANGES.len();
+        let i = self.time_picker_state.selected().unwrap_or(0);
+        let next = (i + 1) % len;
+        self.time_picker_state.select(Some(next));
+    }
+
+    pub fn time_picker_previous(&mut self) {
+        let len = TIME_RANGES.len();
+        let i = self.time_picker_state.selected().unwrap_or(0);
+        let prev = if i == 0 { len - 1 } else { i - 1 };
+        self.time_picker_state.select(Some(prev));
+    }
+
+    pub fn time_picker_confirm(&mut self) {
+        if let Some(i) = self.time_picker_state.selected() {
+            self.log_time_range = TIME_RANGES[i];
+            self.mark_logs_dirty();
+        }
+        self.show_time_picker = false;
     }
 
     pub fn next(&mut self) {
@@ -260,28 +353,44 @@ impl App {
     pub fn load_logs_for_selected(&mut self) {
         let current_service = self.selected_unit().map(|s| s.unit.clone());
 
-        if current_service != self.last_selected_service {
+        if current_service != self.last_selected_service || self.log_filters_dirty {
             self.last_selected_service = current_service.clone();
+            self.log_filters_dirty = false;
             self.logs_scroll = 0;
             self.clear_log_search();
 
             if let Some(unit) = current_service {
-                match fetch_logs(&unit, 1000, self.user_mode) {
+                match fetch_log_entries(
+                    &unit,
+                    1000,
+                    self.user_mode,
+                    self.log_priority_filter,
+                    self.log_time_range,
+                ) {
                     Ok(logs) => {
                         self.logs = logs;
-                        // Auto-scroll to bottom (most recent logs)
                         if !self.logs.is_empty() {
                             self.logs_scroll = self.logs.len().saturating_sub(1);
                         }
                     }
                     Err(e) => {
-                        self.logs = vec![format!("Error fetching logs: {}", e)];
+                        self.logs = vec![LogEntry {
+                            timestamp: None,
+                            priority: None,
+                            pid: None,
+                            identifier: None,
+                            message: format!("Error fetching logs: {}", e),
+                        }];
                     }
                 }
             } else {
                 self.logs.clear();
             }
         }
+    }
+
+    pub fn mark_logs_dirty(&mut self) {
+        self.log_filters_dirty = true;
     }
 
     pub fn scroll_logs_up(&mut self, amount: usize) {
@@ -331,8 +440,8 @@ impl App {
         }
 
         let query = self.log_search_query.to_lowercase();
-        for (i, line) in self.logs.iter().enumerate() {
-            if line.to_lowercase().contains(&query) {
+        for (i, entry) in self.logs.iter().enumerate() {
+            if entry.message.to_lowercase().contains(&query) {
                 self.log_search_matches.push(i);
             }
         }
@@ -397,6 +506,8 @@ impl App {
         self.last_selected_service = None;
         self.logs.clear();
         self.clear_log_search();
+        self.log_priority_filter = None;
+        self.log_time_range = TimeRange::All;
         self.load_services();
     }
 }

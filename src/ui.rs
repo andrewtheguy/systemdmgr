@@ -7,7 +7,10 @@ use ratatui::{
 };
 
 use crate::app::App;
-use crate::service::UNIT_TYPES;
+use crate::service::{
+    format_log_timestamp, priority_label, LogEntry, TimeRange, PRIORITY_LABELS, TIME_RANGES,
+    UNIT_TYPES,
+};
 
 /// Layout regions for mouse hit testing
 pub struct LayoutRegions {
@@ -186,11 +189,18 @@ pub fn render(frame: &mut Frame, app: &mut App) {
 
     // Logs panel (only if visible)
     if let Some(logs_area) = logs_area {
-        let logs_title = if let Some(ref service_name) = app.last_selected_service {
+        let mut logs_title = if let Some(ref service_name) = app.last_selected_service {
             format!("Logs: {}", service_name)
         } else {
             "Logs".to_string()
         };
+
+        if let Some(p) = app.log_priority_filter {
+            logs_title.push_str(&format!(" [p:{}]", priority_label(p)));
+        }
+        if app.log_time_range != TimeRange::All {
+            logs_title.push_str(&format!(" [t:{}]", app.log_time_range.label()));
+        }
 
         let focused_suffix = " [FOCUSED]";
 
@@ -204,9 +214,7 @@ pub fn render(frame: &mut Frame, app: &mut App) {
             .enumerate()
             .skip(app.logs_scroll)
             .take(visible_lines)
-            .map(|(line_idx, line)| {
-                highlight_search_in_line(line, line_idx, app)
-            })
+            .map(|(line_idx, entry)| render_log_entry(entry, line_idx, app))
             .collect();
 
         let scroll_info = if !app.logs.is_empty() {
@@ -239,15 +247,15 @@ pub fn render(frame: &mut Frame, app: &mut App) {
     let footer_text = if app.log_search_mode {
         "Type to search logs | Esc/Enter: Exit search | ?: Help"
     } else if app.show_logs && !app.log_search_query.is_empty() {
-        "l: Exit logs | j/k: Scroll | n/N: Next/Prev match | t: Type | u: User/System | Esc: Clear | ?: Help"
+        "l: Exit logs | j/k: Scroll | n/N: Next/Prev match | p: Priority | T: Time | t: Type | u: User/System | Esc: Clear | ?: Help"
     } else if app.show_logs {
-        "l: Exit logs | j/k: Scroll | g/G: Top/Bottom | /: Search logs | t: Type | u: User/System | ?: Help"
+        "l: Exit logs | j/k: Scroll | g/G: Top/Bottom | /: Search logs | p: Priority | T: Time | t: Type | u: User/System | ?: Help"
     } else if app.search_mode {
         "Type to search | Esc/Enter: Exit search | ?: Help"
     } else if !app.search_query.is_empty() || app.status_filter.is_some() {
-        "q: Quit | /: Search | s: Status | t: Type | l: Logs | u: User/System | Esc: Clear | ?: Help"
+        "q: Quit | /: Search | s: Status | t: Type | l: Logs | p: Priority | T: Time | u: User/System | Esc: Clear | ?: Help"
     } else {
-        "q/Esc: Quit | /: Search | s: Status | t: Type | l: Logs | u: User/System | ?: Help"
+        "q/Esc: Quit | /: Search | s: Status | t: Type | l: Logs | p: Priority | T: Time | u: User/System | ?: Help"
     };
     let footer = Paragraph::new(footer_text)
         .style(Style::default().fg(Color::DarkGray))
@@ -264,25 +272,118 @@ pub fn render(frame: &mut Frame, app: &mut App) {
         render_type_picker(frame, app);
     }
 
+    // Priority picker overlay
+    if app.show_priority_picker {
+        render_priority_picker(frame, app);
+    }
+
+    // Time range picker overlay
+    if app.show_time_picker {
+        render_time_picker(frame, app);
+    }
+
     // Help overlay
     if app.show_help {
         render_help(frame, app);
     }
 }
 
-fn highlight_search_in_line<'a>(line: &str, line_idx: usize, app: &App) -> Line<'a> {
+fn priority_color(p: u8) -> (Color, bool) {
+    match p {
+        0..=2 => (Color::Red, true),    // emerg/alert/crit - bold
+        3 => (Color::Red, false),        // err
+        4 => (Color::Yellow, false),     // warning
+        5 => (Color::Cyan, false),       // notice
+        6 => (Color::White, false),      // info
+        7 => (Color::DarkGray, false),   // debug
+        _ => (Color::White, false),
+    }
+}
+
+fn render_log_entry<'a>(entry: &LogEntry, line_idx: usize, app: &App) -> Line<'a> {
+    let mut spans: Vec<Span<'a>> = Vec::new();
+
+    // Timestamp
+    if let Some(ts) = entry.timestamp {
+        let formatted = format_log_timestamp(ts);
+        if !formatted.is_empty() {
+            spans.push(Span::styled(
+                formatted,
+                Style::default().fg(Color::DarkGray),
+            ));
+            spans.push(Span::raw(" "));
+        }
+    }
+
+    // Priority label
+    let (msg_color, msg_bold) = entry
+        .priority
+        .map(priority_color)
+        .unwrap_or((Color::White, false));
+
+    if let Some(p) = entry.priority {
+        let label = priority_label(p);
+        let (color, bold) = priority_color(p);
+        let mut style = Style::default().fg(color);
+        if bold {
+            style = style.add_modifier(Modifier::BOLD);
+        }
+        spans.push(Span::styled(format!("[{}]", label), style));
+        spans.push(Span::raw(" "));
+    }
+
+    // Identifier/PID
+    match (&entry.identifier, &entry.pid) {
+        (Some(ident), Some(pid)) => {
+            spans.push(Span::styled(
+                format!("({}/{}): ", ident, pid),
+                Style::default().fg(Color::DarkGray),
+            ));
+        }
+        (Some(ident), None) => {
+            spans.push(Span::styled(
+                format!("{}: ", ident),
+                Style::default().fg(Color::DarkGray),
+            ));
+        }
+        (None, Some(pid)) => {
+            spans.push(Span::styled(
+                format!("({}): ", pid),
+                Style::default().fg(Color::DarkGray),
+            ));
+        }
+        (None, None) => {}
+    }
+
+    // Message with severity coloring and search highlighting
+    let mut base_style = Style::default().fg(msg_color);
+    if msg_bold {
+        base_style = base_style.add_modifier(Modifier::BOLD);
+    }
+
+    let message_spans = highlight_search_in_message(&entry.message, line_idx, app, base_style);
+    spans.extend(message_spans);
+
+    Line::from(spans)
+}
+
+fn highlight_search_in_message<'a>(
+    message: &str,
+    line_idx: usize,
+    app: &App,
+    base_style: Style,
+) -> Vec<Span<'a>> {
     if app.log_search_query.is_empty() {
-        return Line::from(line.to_string());
+        return vec![Span::styled(message.to_string(), base_style)];
     }
 
     let query_lower = app.log_search_query.to_lowercase();
-    let line_lower = line.to_lowercase();
+    let msg_lower = message.to_lowercase();
 
-    if !line_lower.contains(&query_lower) {
-        return Line::from(line.to_string());
+    if !msg_lower.contains(&query_lower) {
+        return vec![Span::styled(message.to_string(), base_style)];
     }
 
-    // Determine if this line is the current match
     let is_current_match = app.log_search_match_index.is_some_and(|mi| {
         app.log_search_matches
             .get(mi)
@@ -299,24 +400,24 @@ fn highlight_search_in_line<'a>(line: &str, line_idx: usize, app: &App) -> Line<
     let mut pos = 0;
     let query_len = app.log_search_query.len();
 
-    while pos < line.len() {
-        if let Some(match_start) = line_lower[pos..].find(&query_lower) {
+    while pos < message.len() {
+        if let Some(match_start) = msg_lower[pos..].find(&query_lower) {
             let abs_start = pos + match_start;
             if abs_start > pos {
-                spans.push(Span::raw(line[pos..abs_start].to_string()));
+                spans.push(Span::styled(message[pos..abs_start].to_string(), base_style));
             }
             spans.push(Span::styled(
-                line[abs_start..abs_start + query_len].to_string(),
+                message[abs_start..abs_start + query_len].to_string(),
                 highlight_style,
             ));
             pos = abs_start + query_len;
         } else {
-            spans.push(Span::raw(line[pos..].to_string()));
+            spans.push(Span::styled(message[pos..].to_string(), base_style));
             break;
         }
     }
 
-    Line::from(spans)
+    spans
 }
 
 fn render_help(frame: &mut Frame, app: &App) {
@@ -335,6 +436,8 @@ fn render_help(frame: &mut Frame, app: &App) {
         Line::from("  /             Start search"),
         Line::from("  s             Open status filter"),
         Line::from("  t             Open unit type picker"),
+        Line::from("  p             Log priority filter"),
+        Line::from("  T             Log time range filter"),
         Line::from("  Esc           Clear search/filter"),
         Line::from(""),
         Line::from(vec![Span::styled("Logs Panel", section_style)]),
@@ -352,6 +455,8 @@ fn render_help(frame: &mut Frame, app: &App) {
             Line::from("  G / End       Go to bottom of logs"),
             Line::from("  /             Search within logs"),
             Line::from("  n / N         Next/Prev search match"),
+            Line::from("  p             Log priority filter"),
+            Line::from("  T             Log time range filter"),
             Line::from("  l             Exit log mode"),
             Line::from("  Esc           Clear log search"),
             Line::from(""),
@@ -459,6 +564,78 @@ fn render_type_picker(frame: &mut Frame, app: &mut App) {
     let area = centered_fixed_rect(30, UNIT_TYPES.len() as u16 + 2, frame.area());
     frame.render_widget(Clear, area);
     frame.render_stateful_widget(list, area, &mut app.type_picker_state);
+}
+
+fn render_priority_picker(frame: &mut Frame, app: &mut App) {
+    // 9 items: "All" + 8 priority levels
+    let mut items: Vec<ListItem> = Vec::with_capacity(9);
+
+    // "All" option
+    let all_active = app.log_priority_filter.is_none();
+    let all_marker = if all_active { " *" } else { "" };
+    items.push(
+        ListItem::new(format!("  All{}", all_marker))
+            .style(Style::default().fg(Color::Cyan)),
+    );
+
+    // Priority levels 0-7
+    for (i, &label) in PRIORITY_LABELS.iter().enumerate() {
+        let p = i as u8;
+        let is_active = app.log_priority_filter == Some(p);
+        let marker = if is_active { " *" } else { "" };
+        let (color, bold) = priority_color(p);
+        let mut style = Style::default().fg(color);
+        if bold {
+            style = style.add_modifier(Modifier::BOLD);
+        }
+        items.push(ListItem::new(format!("  {} (0-{}){}",  label, i, marker)).style(style));
+    }
+
+    let list = List::new(items)
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .title("Log Priority Filter")
+                .style(Style::default().bg(Color::Black)),
+        )
+        .highlight_style(
+            Style::default()
+                .bg(Color::DarkGray)
+                .add_modifier(Modifier::BOLD),
+        );
+
+    let area = centered_fixed_rect(30, 11, frame.area()); // 9 items + 2 border
+    frame.render_widget(Clear, area);
+    frame.render_stateful_widget(list, area, &mut app.priority_picker_state);
+}
+
+fn render_time_picker(frame: &mut Frame, app: &mut App) {
+    let items: Vec<ListItem> = TIME_RANGES
+        .iter()
+        .map(|&tr| {
+            let is_active = tr == app.log_time_range;
+            let marker = if is_active { " *" } else { "" };
+            let text = format!("  {}{}", tr.label(), marker);
+            ListItem::new(text).style(Style::default().fg(Color::Cyan))
+        })
+        .collect();
+
+    let list = List::new(items)
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .title("Log Time Range")
+                .style(Style::default().bg(Color::Black)),
+        )
+        .highlight_style(
+            Style::default()
+                .bg(Color::DarkGray)
+                .add_modifier(Modifier::BOLD),
+        );
+
+    let area = centered_fixed_rect(30, TIME_RANGES.len() as u16 + 2, frame.area());
+    frame.render_widget(Clear, area);
+    frame.render_stateful_widget(list, area, &mut app.time_picker_state);
 }
 
 fn centered_fixed_rect(width: u16, height: u16, area: Rect) -> Rect {
