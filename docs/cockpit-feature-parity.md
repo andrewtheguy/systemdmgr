@@ -75,9 +75,9 @@ systemdview (v0.0.1-alpha) is a terminal UI for browsing systemd services, built
 | **Log Viewing** | | | |
 | View unit logs | Yes | Yes | Done |
 | Search within logs | Yes | Yes | Done |
-| Filter by log severity/priority | Yes | No | Phase 3 |
-| Filter by time range | Yes | No | Phase 3 |
-| Structured log metadata (PID, priority, timestamp) | Yes | No | Phase 3 |
+| Filter by log severity/priority | Yes | Yes | Done |
+| Filter by time range | Yes | Yes | Done |
+| Structured log metadata (PID, priority, timestamp) | Yes | Yes | Done |
 | Real-time log streaming (follow) | Yes | No | Phase 5 |
 | **Unit Details** | | | |
 | Unit file path display | Yes | No | Phase 4 |
@@ -177,7 +177,7 @@ Adapt `App.update_filter()` (`src/app.rs:72-105`) — the status filter options 
 
 ---
 
-### Phase 3: Enhanced Log Viewing
+### Phase 3: Enhanced Log Viewing — Done
 
 **Goal:** Improve log viewing with severity filtering, time-range filtering, and structured metadata.
 
@@ -187,70 +187,20 @@ Adapt `App.update_filter()` (`src/app.rs:72-105`) — the status filter options 
 - Display structured log metadata (timestamp, PID, priority)
 - Color-code log lines by severity
 
-**Implementation details:**
-
-**Severity/priority filtering:**
-
-journalctl supports priority filtering with `-p <level>`:
-- `0` emerg, `1` alert, `2` crit, `3` err, `4` warning, `5` notice, `6` info, `7` debug
-- `-p err` shows err and above (emerg, alert, crit, err)
-
-Add a `log_priority_filter: Option<u8>` field to `App`. Pass to journalctl:
-```
-journalctl -u <unit> -p <level> -n <lines> --no-pager
-```
-
-UI: Add a priority picker popup (reuse `render_status_picker` pattern from `src/ui.rs:371-410`), bound to `p` key. Options: All, emerg, alert, crit, err, warning, notice, info, debug.
-
-**Time-range filtering:**
-
-journalctl supports `--since` and `--until` with timestamps:
-```
-journalctl -u <unit> --since "2024-01-01 00:00:00" --until "2024-01-02 00:00:00"
-```
-
-Predefined presets are simpler to implement in a TUI than free-form date input:
-- Last 15 minutes: `--since "15 min ago"`
-- Last 1 hour: `--since "1 hour ago"`
-- Last 24 hours: `--since "1 day ago"`
-- Last 7 days: `--since "7 days ago"`
-- Today: `--since today`
-- All time: (no flag)
-
-Add a time range picker popup, bound to a key (e.g., `T`).
-
-**Structured log output:**
-
-Switch from plain text to JSON output for richer metadata:
-```
-journalctl -u <unit> -n <lines> --no-pager --output=json
-```
-
-Each JSON line contains fields like:
-- `MESSAGE` — the log message
-- `PRIORITY` — severity level (0-7)
-- `_PID` — process ID
-- `__REALTIME_TIMESTAMP` — microsecond timestamp
-- `SYSLOG_IDENTIFIER` — program name
-
-Parse into a `LogEntry` struct:
-```rust
-pub struct LogEntry {
-    pub message: String,
-    pub priority: u8,
-    pub pid: Option<String>,
-    pub timestamp: u64,       // microseconds since epoch
-    pub identifier: Option<String>,
-}
-```
-
-**Color-coding by severity** — extend the log rendering in `src/ui.rs:191-200`:
-- emerg/alert/crit: Red, bold
-- err: Red
-- warning: Yellow
-- notice: Cyan
-- info: White (default)
-- debug: DarkGray
+**What was implemented:**
+- Switched journalctl from plain text to `--output=json` for structured log entries (`src/service.rs`)
+- Added `LogEntry` struct with `timestamp`, `priority`, `pid`, `identifier`, `message` fields
+- Added `fetch_log_entries()` replacing `fetch_logs()`, passing `-p` and `--since` flags to journalctl
+- Added `parse_journal_json_line()` to parse JSON lines (handles string and byte-array MESSAGE variants)
+- Added `TimeRange` enum (All, 15min, 1h, 24h, 7d, Today) with `journalctl_since()` method
+- Added priority picker popup (`p` key) with All + 8 severity levels (emerg through debug)
+- Added time range picker popup (`T` key) with 6 preset time ranges
+- Log lines color-coded by severity: red+bold for emerg/alert/crit, red for err, yellow for warning, cyan for notice, white for info, gray for debug
+- Each log line shows: timestamp (local time), priority label, identifier/PID, and message
+- Active filters shown in log panel title (e.g. `[p:err] [t:Last 1 hour]`)
+- Log search (`/`) searches within message text with severity-colored highlighting
+- Filters reset when switching user/system mode or unit type
+- Added `chrono` dependency for timestamp formatting
 
 ---
 
