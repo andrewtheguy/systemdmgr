@@ -8,8 +8,8 @@ use ratatui::{
 
 use crate::app::App;
 use crate::service::{
-    format_bytes, format_cpu_time, format_log_timestamp, priority_label, LogEntry, TimeRange,
-    UnitAction, FILE_STATE_OPTIONS, PRIORITY_LABELS, TIME_RANGES, UNIT_TYPES,
+    format_bytes, format_cpu_time, format_log_timestamp, format_relative_time, priority_label,
+    LogEntry, TimeRange, UnitAction, FILE_STATE_OPTIONS, PRIORITY_LABELS, TIME_RANGES, UNIT_TYPES,
 };
 
 /// Layout regions for mouse hit testing
@@ -1038,6 +1038,72 @@ fn render_details_modal(frame: &mut Frame, app: &mut App) {
         Span::styled(props.load_state.clone(), value_style),
     ]));
     lines.push(Line::from(""));
+
+    // Timer section (only for .timer units with data)
+    if unit_name.ends_with(".timer") {
+        let has_timer_data = !props.timers_calendar.is_empty()
+            || !props.timers_monotonic.is_empty()
+            || props.next_elapse_realtime.is_some()
+            || (!props.last_trigger_usec.is_empty() && props.last_trigger_usec != "n/a");
+
+        if has_timer_data {
+            lines.push(Line::from(vec![Span::styled("Timer", section_style)]));
+            for spec in &props.timers_calendar {
+                lines.push(Line::from(vec![
+                    Span::styled("  Schedule:       ", label_style),
+                    Span::styled(spec.clone(), value_style),
+                ]));
+            }
+            for spec in &props.timers_monotonic {
+                lines.push(Line::from(vec![
+                    Span::styled("  Schedule:       ", label_style),
+                    Span::styled(spec.clone(), value_style),
+                ]));
+            }
+            if let Some(next_usec) = props.next_elapse_realtime {
+                lines.push(Line::from(vec![
+                    Span::styled("  Next Trigger:   ", label_style),
+                    Span::styled(format_relative_time(next_usec), value_style),
+                ]));
+            }
+            if !props.last_trigger_usec.is_empty() && props.last_trigger_usec != "n/a" {
+                lines.push(Line::from(vec![
+                    Span::styled("  Last Trigger:   ", label_style),
+                    Span::styled(props.last_trigger_usec.clone(), value_style),
+                ]));
+            }
+            if !props.result.is_empty() {
+                let result_color = if props.result == "success" {
+                    Color::Green
+                } else {
+                    Color::Red
+                };
+                lines.push(Line::from(vec![
+                    Span::styled("  Result:         ", label_style),
+                    Span::styled(props.result.clone(), Style::default().fg(result_color)),
+                ]));
+            }
+            if props.persistent == "yes" {
+                lines.push(Line::from(vec![
+                    Span::styled("  Persistent:     ", label_style),
+                    Span::styled(props.persistent.clone(), value_style),
+                ]));
+            }
+            if !props.accuracy_usec.is_empty() && props.accuracy_usec != "0" {
+                lines.push(Line::from(vec![
+                    Span::styled("  Accuracy:       ", label_style),
+                    Span::styled(props.accuracy_usec.clone(), value_style),
+                ]));
+            }
+            if !props.randomized_delay_usec.is_empty() && props.randomized_delay_usec != "0" {
+                lines.push(Line::from(vec![
+                    Span::styled("  Random Delay:   ", label_style),
+                    Span::styled(props.randomized_delay_usec.clone(), value_style),
+                ]));
+            }
+            lines.push(Line::from(""));
+        }
+    }
 
     // Process section (only if PID > 0)
     if props.main_pid > 0 {

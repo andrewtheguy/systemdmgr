@@ -258,6 +258,14 @@ pub struct UnitProperties {
     pub conflicts: Vec<String>,
     pub triggered_by: Vec<String>,
     pub triggers: Vec<String>,
+    pub timers_calendar: Vec<String>,
+    pub timers_monotonic: Vec<String>,
+    pub last_trigger_usec: String,
+    pub result: String,
+    pub next_elapse_realtime: Option<u64>,
+    pub persistent: String,
+    pub accuracy_usec: String,
+    pub randomized_delay_usec: String,
 }
 
 impl SystemdUnit {
@@ -447,7 +455,7 @@ fn merge_timer_details(units: &mut [SystemdUnit], user_mode: bool) {
     }
 }
 
-fn format_relative_time(target_us: u64) -> String {
+pub fn format_relative_time(target_us: u64) -> String {
     let now_us = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_micros() as u64)
@@ -558,6 +566,26 @@ fn merge_file_states(units: &mut [SystemdUnit], unit_type: UnitType, user_mode: 
     }
 }
 
+fn parse_timer_specs(raw: &str) -> Vec<String> {
+    if raw.is_empty() {
+        return Vec::new();
+    }
+    raw.split('}')
+        .filter_map(|chunk| {
+            let chunk = chunk.trim().trim_start_matches('{').trim();
+            if chunk.is_empty() {
+                return None;
+            }
+            let before_semi = chunk.split(';').next().unwrap_or("").trim();
+            if before_semi.is_empty() {
+                None
+            } else {
+                Some(before_semi.to_string())
+            }
+        })
+        .collect()
+}
+
 pub fn fetch_unit_properties(unit_name: &str, user_mode: bool) -> UnitProperties {
     let mut args = Vec::new();
     if user_mode {
@@ -622,6 +650,19 @@ pub fn fetch_unit_properties(unit_name: &str, user_mode: bool) -> UnitProperties
         conflicts: split_deps("Conflicts"),
         triggered_by: split_deps("TriggeredBy"),
         triggers: split_deps("Triggers"),
+        timers_calendar: parse_timer_specs(&get("TimersCalendar")),
+        timers_monotonic: parse_timer_specs(&get("TimersMonotonic")),
+        last_trigger_usec: get("LastTriggerUSec"),
+        result: get("Result"),
+        next_elapse_realtime: map
+            .get("NextElapseUSecRealtime")
+            .unwrap_or(&"0")
+            .parse::<u64>()
+            .ok()
+            .filter(|&v| v != 0),
+        persistent: get("Persistent"),
+        accuracy_usec: get("AccuracyUSec"),
+        randomized_delay_usec: get("RandomizedDelayUSec"),
     }
 }
 
@@ -1339,5 +1380,42 @@ mod tests {
         assert!(props.conflicts.is_empty());
         assert!(props.triggered_by.is_empty());
         assert!(props.triggers.is_empty());
+        assert!(props.timers_calendar.is_empty());
+        assert!(props.timers_monotonic.is_empty());
+        assert_eq!(props.last_trigger_usec, "");
+        assert_eq!(props.result, "");
+        assert_eq!(props.next_elapse_realtime, None);
+        assert_eq!(props.persistent, "");
+        assert_eq!(props.accuracy_usec, "");
+        assert_eq!(props.randomized_delay_usec, "");
+    }
+
+    // parse_timer_specs
+
+    #[test]
+    fn test_parse_timer_specs_single_calendar() {
+        let input = "{ OnCalendar=*-*-* 06:00:00 ; next_elapse=Sun 2026-02-22 06:00:00 UTC }";
+        let result = parse_timer_specs(input);
+        assert_eq!(result, vec!["OnCalendar=*-*-* 06:00:00"]);
+    }
+
+    #[test]
+    fn test_parse_timer_specs_multiple() {
+        let input = "{ OnCalendar=*-*-* 06:00:00 ; next_elapse=Sun 2026-02-22 06:00:00 UTC }{ OnCalendar=*-*-* 18:00:00 ; next_elapse=Sun 2026-02-22 18:00:00 UTC }";
+        let result = parse_timer_specs(input);
+        assert_eq!(result, vec!["OnCalendar=*-*-* 06:00:00", "OnCalendar=*-*-* 18:00:00"]);
+    }
+
+    #[test]
+    fn test_parse_timer_specs_monotonic() {
+        let input = "{ OnBootSec=15min ; next_elapse=n/a }";
+        let result = parse_timer_specs(input);
+        assert_eq!(result, vec!["OnBootSec=15min"]);
+    }
+
+    #[test]
+    fn test_parse_timer_specs_empty() {
+        let result = parse_timer_specs("");
+        assert!(result.is_empty());
     }
 }
