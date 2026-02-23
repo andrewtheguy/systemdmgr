@@ -1140,6 +1140,43 @@ fn render_details_modal(frame: &mut Frame, app: &mut App) {
         }
     }
 
+    // Socket section (only for .socket units with data)
+    if unit_name.ends_with(".socket") && !props.listen.is_empty() {
+        lines.push(Line::from(vec![Span::styled("Socket", section_style)]));
+        lines.push(Line::from(vec![
+            Span::styled("  Listen:         ", label_style),
+            Span::styled(props.listen.clone(), value_style),
+        ]));
+        if props.accept == "yes" {
+            lines.push(Line::from(vec![
+                Span::styled("  Accept:         ", label_style),
+                Span::styled("yes", value_style),
+            ]));
+            if !props.n_accepted.is_empty() && props.n_accepted != "0" {
+                lines.push(Line::from(vec![
+                    Span::styled("  Accepted:       ", label_style),
+                    Span::styled(props.n_accepted.clone(), value_style),
+                ]));
+            }
+            if !props.n_connections.is_empty() && props.n_connections != "0" {
+                lines.push(Line::from(vec![
+                    Span::styled("  Connected:      ", label_style),
+                    Span::styled(props.n_connections.clone(), value_style),
+                ]));
+            }
+        }
+        if !props.triggers.is_empty() {
+            for (i, trigger) in props.triggers.iter().enumerate() {
+                let label = if i == 0 { "  Triggers:       " } else { "                  " };
+                lines.push(Line::from(vec![
+                    Span::styled(label, label_style),
+                    Span::styled(trigger.clone(), value_style),
+                ]));
+            }
+        }
+        lines.push(Line::from(""));
+    }
+
     // Process section (only if PID > 0)
     if props.main_pid > 0 {
         lines.push(Line::from(vec![Span::styled("Process", section_style)]));

@@ -267,6 +267,11 @@ pub struct UnitProperties {
     pub persistent: String,
     pub accuracy_usec: String,
     pub randomized_delay_usec: String,
+    // Socket properties
+    pub listen: String,
+    pub accept: String,
+    pub n_connections: String,
+    pub n_accepted: String,
 }
 
 impl SystemdUnit {
@@ -660,6 +665,10 @@ pub fn fetch_unit_properties(unit_name: &str, user_mode: bool) -> UnitProperties
         persistent: get("Persistent"),
         accuracy_usec: get("AccuracyUSec"),
         randomized_delay_usec: get("RandomizedDelayUSec"),
+        listen: get("Listen"),
+        accept: get("Accept"),
+        n_connections: get("NConnections"),
+        n_accepted: get("NAccepted"),
     }
 }
 
@@ -1386,6 +1395,10 @@ mod tests {
         assert_eq!(props.persistent, "");
         assert_eq!(props.accuracy_usec, "");
         assert_eq!(props.randomized_delay_usec, "");
+        assert_eq!(props.listen, "");
+        assert_eq!(props.accept, "");
+        assert_eq!(props.n_connections, "");
+        assert_eq!(props.n_accepted, "");
     }
 
     // parse_timer_specs
