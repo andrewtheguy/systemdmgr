@@ -8,7 +8,7 @@ use ratatui::{
 
 use crate::app::App;
 use crate::service::{
-    format_bytes, format_cpu_time, format_log_timestamp, priority_label,
+    format_bytes, format_cpu_time, format_log_timestamp, priority_label, COLOR_MUTED,
     LogEntry, TimeRange, UnitAction, FILE_STATE_OPTIONS, PRIORITY_LABELS, TIME_RANGES, UNIT_TYPES,
 };
 
@@ -33,8 +33,14 @@ pub fn get_layout_regions(area: Rect, show_logs: bool) -> LayoutRegions {
             logs_panel: Some(chunks[1]),
         }
     } else {
+        // Split off the 1-row column header so services_list points to the list body
+        let service_chunks = Layout::vertical([
+            Constraint::Length(1),
+            Constraint::Min(1),
+        ])
+        .split(chunks[1]);
         LayoutRegions {
-            services_list: chunks[1],
+            services_list: service_chunks[1],
             logs_panel: None,
         }
     }
@@ -122,11 +128,44 @@ pub fn render(frame: &mut Frame, app: &mut App) {
 
     // Services list (hidden when logs are full-screen)
     if let Some(services_area) = services_area {
+        // Split into column header row + list body
+        let service_chunks = Layout::vertical([
+            Constraint::Length(1),
+            Constraint::Min(1),
+        ])
+        .split(services_area);
+        let header_area = service_chunks[0];
+        let list_area = service_chunks[1];
+
+        // Name column: dynamic width capped at 35 chars, +2 for padding
+        const NAME_MAX: usize = 35;
+        let name_width = app
+            .filtered_indices
+            .iter()
+            .map(|&i| app.services[i].unit.len().min(NAME_MAX))
+            .max()
+            .unwrap_or(4)
+            .max(4)
+            + 2;
+
+        // Column header
+        let header_line = Line::from(Span::styled(
+            format!(
+                " {:<nw$}{:<10}{:<10}{:<16}{}",
+                "NAME", "STATUS", "LOAD", "ENABLED", "DESCRIPTION",
+                nw = name_width,
+            ),
+            Style::default()
+                .fg(Color::Gray)
+                .add_modifier(Modifier::BOLD),
+        ));
+        frame.render_widget(Paragraph::new(header_line), header_area);
+
         if let Some(ref error) = app.error {
             let error_msg = Paragraph::new(error.as_str())
                 .style(Style::default().fg(Color::Red))
                 .block(Block::default().borders(Borders::ALL).title("Error"));
-            frame.render_widget(error_msg, services_area);
+            frame.render_widget(error_msg, list_area);
         } else {
             let items: Vec<ListItem> = app
                 .filtered_indices
@@ -134,31 +173,44 @@ pub fn render(frame: &mut Frame, app: &mut App) {
                 .map(|&i| &app.services[i])
                 .map(|unit| {
                     let status_color = unit.status_color();
-                    let mut spans = vec![
+                    let file_state_str = unit.file_state.as_deref().unwrap_or("");
+                    let mut desc = unit.description.clone();
+                    if let Some(ref detail) = unit.detail {
+                        desc.push_str(&format!(" ({})", detail));
+                    }
+                    let display_name = if unit.unit.len() > NAME_MAX {
+                        format!("{}...", &unit.unit[..NAME_MAX - 3])
+                    } else {
+                        unit.unit.clone()
+                    };
+                    let spans = vec![
                         Span::styled(
-                            format!("{:8}", unit.status_display()),
+                            format!("{:<nw$}", display_name, nw = name_width),
+                            Style::default().fg(Color::White),
+                        ),
+                        Span::styled(
+                            format!("{:<10}", unit.status_display()),
                             Style::default().fg(status_color),
                         ),
-                        Span::styled(&unit.unit, Style::default().fg(Color::White)),
+                        Span::styled(
+                            format!("{:<10}", unit.load),
+                            Style::default().fg(load_color(&unit.load)),
+                        ),
+                        Span::styled(
+                            format!("{:<16}", file_state_str),
+                            Style::default().fg(file_state_color(file_state_str)),
+                        ),
+                        Span::styled(desc, Style::default().fg(Color::Gray)),
                     ];
-                    if let Some(ref detail) = unit.detail {
-                        spans.push(Span::styled(
-                            format!("  ({})", detail),
-                            Style::default().fg(Color::DarkGray),
-                        ));
-                    }
-                    if let Some(ref fs) = unit.file_state {
-                        spans.push(Span::styled(
-                            format!("  [{}]", fs),
-                            Style::default().fg(file_state_color(fs)),
-                        ));
-                    }
                     ListItem::new(Line::from(spans))
                 })
                 .collect();
 
             let type_label = app.unit_type.label();
-            let title = if app.search_query.is_empty() && app.status_filter.is_none() && app.file_state_filter.is_none() {
+            let title = if app.search_query.is_empty()
+                && app.status_filter.is_none()
+                && app.file_state_filter.is_none()
+            {
                 format!("{} ({})", type_label, app.services.len())
             } else {
                 format!(
@@ -177,12 +229,11 @@ pub fn render(frame: &mut Frame, app: &mut App) {
                 )
                 .highlight_style(
                     Style::default()
-                        .bg(Color::DarkGray)
+                        .bg(Color::Rgb(40, 40, 80))
                         .add_modifier(Modifier::BOLD),
-                )
-                .highlight_symbol(">> ");
+                );
 
-            frame.render_stateful_widget(list, services_area, &mut app.list_state);
+            frame.render_stateful_widget(list, list_area, &mut app.list_state);
         }
     }
 
@@ -828,11 +879,21 @@ pub fn get_details_visible_lines(frame: &Frame) -> usize {
     area.height.saturating_sub(2) as usize
 }
 
+fn load_color(state: &str) -> Color {
+    match state {
+        "loaded" => Color::Green,
+        "masked" => Color::Red,
+        "not-found" => COLOR_MUTED,
+        "error" | "bad-setting" => Color::Red,
+        _ => Color::White,
+    }
+}
+
 fn file_state_color(state: &str) -> Color {
     match state {
         "enabled" => Color::Green,
         "disabled" => Color::Yellow,
-        "static" => Color::DarkGray,
+        "static" => COLOR_MUTED,
         "masked" => Color::Red,
         "indirect" => Color::Cyan,
         _ => Color::White,
@@ -1320,7 +1381,7 @@ mod tests {
 
     #[test]
     fn test_file_state_color_static() {
-        assert_eq!(file_state_color("static"), Color::DarkGray);
+        assert_eq!(file_state_color("static"), COLOR_MUTED);
     }
 
     #[test]
@@ -1473,9 +1534,9 @@ mod tests {
     fn test_layout_regions_vertical_structure() {
         let area = Rect::new(0, 0, 100, 50);
         let regions = get_layout_regions(area, false);
-        // Header is 3 rows, footer is 3 rows, middle is the rest
-        // Services list should start after header (y=3) and end before footer
-        assert_eq!(regions.services_list.y, 3);
-        assert_eq!(regions.services_list.height, 50 - 3 - 3);
+        // Header is 3 rows, footer is 3 rows, column header is 1 row, rest is list body
+        // Services list should start after header + column header (y=4)
+        assert_eq!(regions.services_list.y, 4);
+        assert_eq!(regions.services_list.height, 50 - 3 - 3 - 1);
     }
 }

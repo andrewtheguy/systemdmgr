@@ -1,5 +1,8 @@
 use chrono::TimeZone;
 use ratatui::style::Color;
+
+/// Muted foreground color for inactive/dimmed states (visible on DarkGray highlight)
+pub const COLOR_MUTED: Color = Color::DarkGray;
 use serde::Deserialize;
 use std::collections::HashMap;
 use std::process::Command;
@@ -119,7 +122,6 @@ pub const TIME_RANGES: [TimeRange; 6] = [
 #[derive(Debug, Clone, Deserialize)]
 pub struct SystemdUnit {
     pub unit: String,
-    #[allow(dead_code)]
     pub load: String,
     #[allow(dead_code)]
     pub active: String,
@@ -286,12 +288,12 @@ impl SystemdUnit {
         match self.sub.as_str() {
             "running" => Color::Green,
             "exited" => Color::Yellow,
-            "dead" | "stopped" => Color::DarkGray,
+            "dead" | "stopped" => COLOR_MUTED,
             "failed" => Color::Red,
             "waiting" => Color::Cyan,
             "listening" => Color::Green,
             "active" => Color::Green,
-            "inactive" => Color::DarkGray,
+            "inactive" => COLOR_MUTED,
             "elapsed" => Color::Yellow,
             _ => Color::White,
         }
@@ -893,12 +895,12 @@ mod tests {
 
     #[test]
     fn test_status_color_dead() {
-        assert_eq!(make_unit("dead").status_color(), Color::DarkGray);
+        assert_eq!(make_unit("dead").status_color(), COLOR_MUTED);
     }
 
     #[test]
     fn test_status_color_stopped() {
-        assert_eq!(make_unit("stopped").status_color(), Color::DarkGray);
+        assert_eq!(make_unit("stopped").status_color(), COLOR_MUTED);
     }
 
     #[test]
@@ -923,7 +925,7 @@ mod tests {
 
     #[test]
     fn test_status_color_inactive() {
-        assert_eq!(make_unit("inactive").status_color(), Color::DarkGray);
+        assert_eq!(make_unit("inactive").status_color(), COLOR_MUTED);
     }
 
     #[test]
