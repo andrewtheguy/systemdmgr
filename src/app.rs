@@ -63,6 +63,7 @@ pub struct App {
     pub action_receiver: Option<mpsc::Receiver<Result<String, String>>>,
     pub status_message: Option<String>,
     pub live_tail: bool,
+    pub last_refreshed: Option<chrono::DateTime<chrono::Local>>,
 }
 
 impl App {
@@ -118,6 +119,7 @@ impl App {
             action_receiver: None,
             status_message: None,
             live_tail: false,
+            last_refreshed: None,
         };
         app.load_services();
         app
@@ -129,6 +131,7 @@ impl App {
             Ok(services) => {
                 self.services = services;
                 self.error = None;
+                self.last_refreshed = Some(chrono::Local::now());
                 self.update_filter();
                 if !self.filtered_indices.is_empty() && self.list_state.selected().is_none() {
                     self.list_state.select(Some(0));
@@ -872,6 +875,7 @@ mod tests {
             action_receiver: None,
             status_message: None,
             live_tail: false,
+            last_refreshed: None,
         };
         if !app.filtered_indices.is_empty() {
             app.list_state.select(Some(0));

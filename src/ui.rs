@@ -120,7 +120,12 @@ pub fn render(frame: &mut Frame, app: &mut App) {
             .block(Block::default().borders(Borders::ALL))
     } else {
         let scope_label = if app.user_mode { "User" } else { "System" };
-        Paragraph::new(format!("SystemD {} [{}]", app.unit_type.label(), scope_label))
+        let title = format!("SystemD {} [{}]", app.unit_type.label(), scope_label);
+        let refreshed = app
+            .last_refreshed
+            .map(|t| format!("  (loaded {})", t.format("%b %d %H:%M:%S %Z")))
+            .unwrap_or_default();
+        Paragraph::new(format!("{}{}", title, refreshed))
             .style(Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD))
             .block(Block::default().borders(Borders::ALL))
     };
