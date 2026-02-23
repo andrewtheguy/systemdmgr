@@ -151,8 +151,8 @@ pub fn render(frame: &mut Frame, app: &mut App) {
         // Column header
         let header_line = Line::from(Span::styled(
             format!(
-                " {:<nw$}{:<10}{:<10}{:<16}{}",
-                "NAME", "STATUS", "LOAD", "ENABLED", "DESCRIPTION",
+                " {:<nw$}{:<10}{:<16}{:<10}{}",
+                "NAME", "STATUS", "ENABLED", "LOAD", "DESCRIPTION",
                 nw = name_width,
             ),
             Style::default()
@@ -193,12 +193,12 @@ pub fn render(frame: &mut Frame, app: &mut App) {
                             Style::default().fg(status_color),
                         ),
                         Span::styled(
-                            format!("{:<10}", unit.load),
-                            Style::default().fg(load_color(&unit.load)),
-                        ),
-                        Span::styled(
                             format!("{:<16}", file_state_str),
                             Style::default().fg(file_state_color(file_state_str)),
+                        ),
+                        Span::styled(
+                            format!("{:<10}", unit.load),
+                            Style::default().fg(load_color(&unit.load)),
                         ),
                         Span::styled(desc, Style::default().fg(Color::Gray)),
                     ];
@@ -1078,21 +1078,19 @@ fn render_details_modal(frame: &mut Frame, app: &mut App) {
     let label_style = Style::default().fg(Color::Cyan);
     let value_style = Style::default().fg(Color::White);
 
-    // General section
+    // General section — fields matching main screen order first, then extras
     lines.push(Line::from(vec![Span::styled("General", section_style)]));
     lines.push(Line::from(vec![
-        Span::styled("  Description:    ", label_style),
-        Span::styled(props.description.clone(), value_style),
+        Span::styled("  Name:           ", label_style),
+        Span::styled(unit_name.clone(), value_style),
     ]));
-    if !props.fragment_path.is_empty() {
-        lines.push(Line::from(vec![
-            Span::styled("  Unit File:      ", label_style),
-            Span::styled(props.fragment_path.clone(), value_style),
-        ]));
-    }
+    lines.push(Line::from(vec![
+        Span::styled("  Status:         ", label_style),
+        Span::styled(props.sub_state.clone(), value_style),
+    ]));
     if !props.unit_file_state.is_empty() {
         lines.push(Line::from(vec![
-            Span::styled("  Enabled State:  ", label_style),
+            Span::styled("  Enabled:        ", label_style),
             Span::styled(
                 props.unit_file_state.clone(),
                 Style::default().fg(file_state_color(&props.unit_file_state)),
@@ -1100,11 +1098,19 @@ fn render_details_modal(frame: &mut Frame, app: &mut App) {
         ]));
     }
     lines.push(Line::from(vec![
-        Span::styled("  Active State:   ", label_style),
+        Span::styled("  Load State:     ", label_style),
         Span::styled(
-            format!("{} ({})", props.active_state, props.sub_state),
-            value_style,
+            props.load_state.clone(),
+            Style::default().fg(load_color(&props.load_state)),
         ),
+    ]));
+    lines.push(Line::from(vec![
+        Span::styled("  Description:    ", label_style),
+        Span::styled(props.description.clone(), value_style),
+    ]));
+    lines.push(Line::from(vec![
+        Span::styled("  Active State:   ", label_style),
+        Span::styled(props.active_state.clone(), value_style),
     ]));
     if !props.active_enter_timestamp.is_empty() {
         lines.push(Line::from(vec![
@@ -1112,10 +1118,12 @@ fn render_details_modal(frame: &mut Frame, app: &mut App) {
             Span::styled(props.active_enter_timestamp.clone(), value_style),
         ]));
     }
-    lines.push(Line::from(vec![
-        Span::styled("  Load State:     ", label_style),
-        Span::styled(props.load_state.clone(), value_style),
-    ]));
+    if !props.fragment_path.is_empty() {
+        lines.push(Line::from(vec![
+            Span::styled("  Unit File:      ", label_style),
+            Span::styled(props.fragment_path.clone(), value_style),
+        ]));
+    }
     lines.push(Line::from(""));
 
     // Timer section (only for .timer units with data)
@@ -1321,7 +1329,12 @@ fn render_details_modal(frame: &mut Frame, app: &mut App) {
         .take(visible_height)
         .collect();
 
-    let title = format!(" {} {}", unit_name, scroll_info);
+    let title_name = if unit_name.len() > 35 {
+        format!("{}...", &unit_name[..32])
+    } else {
+        unit_name.clone()
+    };
+    let title = format!(" {} {}", title_name, scroll_info);
 
     let paragraph = Paragraph::new(visible_lines)
         .style(Style::default().fg(Color::White))
