@@ -1177,6 +1177,27 @@ fn render_details_modal(frame: &mut Frame, app: &mut App) {
         lines.push(Line::from(""));
     }
 
+    // Path section (only for .path units)
+    if unit_name.ends_with(".path") && (!props.paths.is_empty() || !props.triggers.is_empty()) {
+        lines.push(Line::from(vec![Span::styled("Path", section_style)]));
+        if !props.paths.is_empty() {
+            lines.push(Line::from(vec![
+                Span::styled("  Watch:          ", label_style),
+                Span::styled(props.paths.clone(), value_style),
+            ]));
+        }
+        if !props.triggers.is_empty() {
+            for (i, trigger) in props.triggers.iter().enumerate() {
+                let label = if i == 0 { "  Triggers:       " } else { "                  " };
+                lines.push(Line::from(vec![
+                    Span::styled(label, label_style),
+                    Span::styled(trigger.clone(), value_style),
+                ]));
+            }
+        }
+        lines.push(Line::from(""));
+    }
+
     // Process section (only if PID > 0)
     if props.main_pid > 0 {
         lines.push(Line::from(vec![Span::styled("Process", section_style)]));

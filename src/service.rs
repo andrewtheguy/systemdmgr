@@ -267,6 +267,8 @@ pub struct UnitProperties {
     pub persistent: String,
     pub accuracy_usec: String,
     pub randomized_delay_usec: String,
+    // Path properties
+    pub paths: String,
     // Socket properties
     pub listen: String,
     pub accept: String,
@@ -665,6 +667,7 @@ pub fn fetch_unit_properties(unit_name: &str, user_mode: bool) -> UnitProperties
         persistent: get("Persistent"),
         accuracy_usec: get("AccuracyUSec"),
         randomized_delay_usec: get("RandomizedDelayUSec"),
+        paths: get("Paths"),
         listen: get("Listen"),
         accept: get("Accept"),
         n_connections: get("NConnections"),
@@ -1395,6 +1398,7 @@ mod tests {
         assert_eq!(props.persistent, "");
         assert_eq!(props.accuracy_usec, "");
         assert_eq!(props.randomized_delay_usec, "");
+        assert_eq!(props.paths, "");
         assert_eq!(props.listen, "");
         assert_eq!(props.accept, "");
         assert_eq!(props.n_connections, "");
