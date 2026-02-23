@@ -675,11 +675,11 @@ fn render_status_picker(frame: &mut Frame, app: &mut App) {
                 "running" => Color::Green,
                 "exited" => Color::Yellow,
                 "failed" => Color::Red,
-                "dead" => Color::DarkGray,
+                "dead" => COLOR_MUTED,
                 "waiting" => Color::Cyan,
                 "listening" => Color::Green,
                 "active" => Color::Green,
-                "inactive" => Color::DarkGray,
+                "inactive" => COLOR_MUTED,
                 "elapsed" => Color::Yellow,
                 _ => Color::White,
             };

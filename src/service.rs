@@ -2,7 +2,7 @@ use chrono::TimeZone;
 use ratatui::style::Color;
 
 /// Muted foreground color for inactive/dimmed states (visible on DarkGray highlight)
-pub const COLOR_MUTED: Color = Color::DarkGray;
+pub const COLOR_MUTED: Color = Color::Rgb(100, 100, 100);
 use serde::Deserialize;
 use std::collections::HashMap;
 use std::process::Command;
