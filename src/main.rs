@@ -18,6 +18,26 @@ use ratatui::{prelude::*, Terminal};
 use app::App;
 
 fn main() -> io::Result<()> {
+    let args: Vec<String> = std::env::args().collect();
+    if args.len() > 2 {
+        eprintln!("Too many arguments");
+        eprintln!("Usage: systemdmgr [version]");
+        std::process::exit(1);
+    }
+    if args.len() == 2 {
+        match args[1].as_str() {
+            "version" | "--version" | "-v" => {
+                println!("systemdmgr {}", env!("CARGO_PKG_VERSION"));
+                return Ok(());
+            }
+            arg => {
+                eprintln!("Unknown argument: {arg}");
+                eprintln!("Usage: systemdmgr [version]");
+                std::process::exit(1);
+            }
+        }
+    }
+
     // Setup terminal with mouse capture
     enable_raw_mode()?;
     execute!(stdout(), EnterAlternateScreen, EnableMouseCapture)?;

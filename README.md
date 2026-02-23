@@ -46,6 +46,12 @@ cargo install --path .
 systemdmgr
 ```
 
+Check the installed version:
+
+```bash
+systemdmgr version
+```
+
 ## Keyboard Shortcuts
 
 Press `?` in the app to see context-sensitive help.
