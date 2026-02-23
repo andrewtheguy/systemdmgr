@@ -264,101 +264,28 @@ download_only() {
     print_info "Binary saved to: ${output_file}"
 }
 
-# Check if sourcing a profile would add target_dir to PATH
-check_profile_has_path() {
-    local profile="$1"
-    local target_dir="$2"
-
-    if [ -z "$profile" ] || [ ! -f "$profile" ]; then
-        return 1
-    fi
-
-    local new_path
-    new_path=$(HOME="$HOME" SHELL="$SHELL" bash -c "source '$profile' 2>/dev/null; echo \"\$PATH\"" 2>/dev/null)
-
-    if [[ ":$new_path:" == *":$target_dir:"* ]]; then
-        return 0
-    fi
-    return 1
-}
-
-# Find a profile file that has .local/bin configured
-find_profile_with_local_bin() {
-    local target_dir="$1"
-    local shell_name
-    shell_name=$(basename "$SHELL")
-
-    local profiles=()
-
-    case "$shell_name" in
-        bash)
-            profiles=("$HOME/.bash_profile" "$HOME/.profile" "$HOME/.bashrc")
-            ;;
-        zsh)
-            profiles=("$HOME/.zprofile" "$HOME/.zshrc")
-            ;;
-        *)
-            profiles=("$HOME/.profile")
-            ;;
-    esac
-
-    for profile in "${profiles[@]}"; do
-        if check_profile_has_path "$profile" "$target_dir"; then
-            echo "$profile"
-            return 0
-        fi
-    done
-
-    return 1
-}
-
 # Download binary to temporary location and install
 download_and_install() {
     local temp_dir
     temp_dir=$(mktemp -d)
     local temp_binary="${temp_dir}/${BINARY_NAME}"
-    local final_path="$HOME/.local/bin/systemdmgr"
+    local install_dir="/usr/local/bin"
+    local final_path="${install_dir}/systemdmgr"
 
     trap 'rm -rf "$temp_dir"' EXIT
 
     download_binary "$temp_binary"
     chmod +x "$temp_binary"
 
-    # Create target directory if it doesn't exist
-    local target_dir="$HOME/.local/bin"
-    mkdir -p "$target_dir"
-
-    # Move the binary to final location
-    if ! mv "$temp_binary" "$final_path"; then
-        print_error "Failed to move binary to final location"
+    # Move the binary to final location (requires sudo)
+    if ! sudo mv "$temp_binary" "$final_path"; then
+        print_error "Failed to install binary to ${final_path}"
         exit 1
     fi
 
     rm -rf "$temp_dir"
 
     print_info "Binary installed successfully to ${final_path}"
-
-    # Check PATH and suggest how to fix if needed
-    if [[ ":$PATH:" != *":$target_dir:"* ]]; then
-        local profile
-        profile=$(find_profile_with_local_bin "$target_dir")
-
-        if [ -n "$profile" ]; then
-            print_warn "${target_dir} is not in your current PATH, but is configured in your profile."
-            print_warn "To use systemdmgr now, reload your profile:"
-            echo ""
-            echo "    source $profile"
-            echo ""
-            print_warn "Or start a new terminal session."
-        else
-            print_warn "${target_dir} is not in your PATH"
-            print_warn "Add the following line to your shell profile (.bashrc, .zshrc, etc.):"
-            echo ""
-            echo "    export PATH=\"\$HOME/.local/bin:\$PATH\""
-            echo ""
-            print_warn "Then reload your profile or start a new terminal session."
-        fi
-    fi
 }
 
 # Display usage information
@@ -425,10 +352,11 @@ install() {
     fi
 }
 
-# Check if running with proper privileges
+# Check if sudo is available for installation
 check_privileges() {
-    if [ "$EUID" -eq 0 ]; then
-        print_warn "Running as root. It's recommended to install as a regular user."
+    if ! command -v sudo >/dev/null 2>&1 && [ "$EUID" -ne 0 ]; then
+        print_error "sudo is required to install to /usr/local/bin. Please install sudo or run as root."
+        exit 1
     fi
 }
 

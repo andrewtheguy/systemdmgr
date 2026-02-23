@@ -20,13 +20,13 @@ A terminal UI for viewing and browsing systemd services.
 ### Quick Install
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/andrewtheguy/systemdmgr/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/andrewtheguy/systemdmgr/main/install.sh | sudo bash
 ```
 
 To install a prerelease version:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/andrewtheguy/systemdmgr/main/install.sh | bash -s -- --prerelease
+curl -fsSL https://raw.githubusercontent.com/andrewtheguy/systemdmgr/main/install.sh | sudo bash -s -- --prerelease
 ```
 
 ### From Source
