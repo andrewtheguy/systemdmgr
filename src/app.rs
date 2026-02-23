@@ -86,11 +86,7 @@ impl App {
             log_search_mode: false,
             log_search_matches: Vec::new(),
             log_search_match_index: None,
-            user_mode: std::process::Command::new("id")
-                .arg("-u")
-                .output()
-                .map(|o| String::from_utf8_lossy(&o.stdout).trim() != "0")
-                .unwrap_or(false),
+            user_mode: false,
             unit_type: UnitType::Service,
             show_type_picker: false,
             type_picker_state: ListState::default(),
@@ -137,7 +133,11 @@ impl App {
                 }
             }
             Err(e) => {
-                self.error = Some(e);
+                if self.user_mode {
+                    self.error = Some(e);
+                } else {
+                    self.error = Some(format!("{} (press 'u' to switch to user mode)", e));
+                }
             }
         }
     }
