@@ -296,6 +296,8 @@ fn main() -> io::Result<()> {
                     KeyCode::Esc => {
                         if !app.search_query.is_empty() {
                             app.clear_search();
+                        } else {
+                            app.should_quit = true;
                         }
                     }
                     KeyCode::Char('/') => {
