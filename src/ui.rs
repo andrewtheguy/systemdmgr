@@ -1062,6 +1062,12 @@ fn render_details_modal(frame: &mut Frame, app: &mut App) {
             value_style,
         ),
     ]));
+    if !props.active_enter_timestamp.is_empty() {
+        lines.push(Line::from(vec![
+            Span::styled("  Active Since:   ", label_style),
+            Span::styled(props.active_enter_timestamp.clone(), value_style),
+        ]));
+    }
     lines.push(Line::from(vec![
         Span::styled("  Load State:     ", label_style),
         Span::styled(props.load_state.clone(), value_style),

@@ -244,6 +244,7 @@ pub struct UnitProperties {
     pub fragment_path: String,
     pub unit_file_state: String,
     pub active_state: String,
+    pub active_enter_timestamp: String,
     pub sub_state: String,
     pub load_state: String,
     pub description: String,
@@ -632,6 +633,7 @@ pub fn fetch_unit_properties(unit_name: &str, user_mode: bool) -> UnitProperties
         fragment_path: get("FragmentPath"),
         unit_file_state: get("UnitFileState"),
         active_state: get("ActiveState"),
+        active_enter_timestamp: get("ActiveEnterTimestamp"),
         sub_state: get("SubState"),
         load_state: get("LoadState"),
         description: get("Description"),
@@ -1361,6 +1363,7 @@ mod tests {
         assert_eq!(props.fragment_path, "");
         assert_eq!(props.unit_file_state, "");
         assert_eq!(props.active_state, "");
+        assert_eq!(props.active_enter_timestamp, "");
         assert_eq!(props.sub_state, "");
         assert_eq!(props.load_state, "");
         assert_eq!(props.description, "");
