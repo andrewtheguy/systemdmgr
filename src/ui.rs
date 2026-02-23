@@ -27,20 +27,16 @@ pub fn get_layout_regions(area: Rect, show_logs: bool) -> LayoutRegions {
     ])
     .split(area);
 
-    let (services_area, logs_area) = if show_logs {
-        let middle = Layout::horizontal([
-            Constraint::Percentage(40),
-            Constraint::Percentage(60),
-        ])
-        .split(chunks[1]);
-        (middle[0], Some(middle[1]))
+    if show_logs {
+        LayoutRegions {
+            services_list: chunks[1],
+            logs_panel: Some(chunks[1]),
+        }
     } else {
-        (chunks[1], None)
-    };
-
-    LayoutRegions {
-        services_list: services_area,
-        logs_panel: logs_area,
+        LayoutRegions {
+            services_list: chunks[1],
+            logs_panel: None,
+        }
     }
 }
 
@@ -57,16 +53,11 @@ pub fn render(frame: &mut Frame, app: &mut App) {
     ])
     .split(frame.area());
 
-    // Conditionally split middle section for logs panel
+    // When logs are shown, give full middle area to logs; hide services list
     let (services_area, logs_area) = if app.show_logs {
-        let middle_chunks = Layout::horizontal([
-            Constraint::Percentage(40),
-            Constraint::Percentage(60),
-        ])
-        .split(chunks[1]);
-        (middle_chunks[0], Some(middle_chunks[1]))
+        (None, Some(chunks[1]))
     } else {
-        (chunks[1], None)
+        (Some(chunks[1]), None)
     };
 
     // Header / Search bar
@@ -129,75 +120,70 @@ pub fn render(frame: &mut Frame, app: &mut App) {
     };
     frame.render_widget(header, chunks[0]);
 
-    // Services list
-    if let Some(ref error) = app.error {
-        let error_msg = Paragraph::new(error.as_str())
-            .style(Style::default().fg(Color::Red))
-            .block(Block::default().borders(Borders::ALL).title("Error"));
-        frame.render_widget(error_msg, services_area);
-    } else {
-        let items: Vec<ListItem> = app
-            .filtered_indices
-            .iter()
-            .map(|&i| &app.services[i])
-            .map(|unit| {
-                let status_color = unit.status_color();
-                let mut spans = vec![
-                    Span::styled(
-                        format!("{:8}", unit.status_display()),
-                        Style::default().fg(status_color),
-                    ),
-                    Span::styled(&unit.unit, Style::default().fg(Color::White)),
-                ];
-                if let Some(ref detail) = unit.detail {
-                    spans.push(Span::styled(
-                        format!("  ({})", detail),
-                        Style::default().fg(Color::DarkGray),
-                    ));
-                }
-                if let Some(ref fs) = unit.file_state {
-                    spans.push(Span::styled(
-                        format!("  [{}]", fs),
-                        Style::default().fg(file_state_color(fs)),
-                    ));
-                }
-                ListItem::new(Line::from(spans))
-            })
-            .collect();
-
-        let type_label = app.unit_type.label();
-        let title = if app.search_query.is_empty() && app.status_filter.is_none() && app.file_state_filter.is_none() {
-            format!("{} ({})", type_label, app.services.len())
+    // Services list (hidden when logs are full-screen)
+    if let Some(services_area) = services_area {
+        if let Some(ref error) = app.error {
+            let error_msg = Paragraph::new(error.as_str())
+                .style(Style::default().fg(Color::Red))
+                .block(Block::default().borders(Borders::ALL).title("Error"));
+            frame.render_widget(error_msg, services_area);
         } else {
-            format!(
-                "{} ({}/{})",
-                type_label,
-                app.filtered_indices.len(),
-                app.services.len()
-            )
-        };
+            let items: Vec<ListItem> = app
+                .filtered_indices
+                .iter()
+                .map(|&i| &app.services[i])
+                .map(|unit| {
+                    let status_color = unit.status_color();
+                    let mut spans = vec![
+                        Span::styled(
+                            format!("{:8}", unit.status_display()),
+                            Style::default().fg(status_color),
+                        ),
+                        Span::styled(&unit.unit, Style::default().fg(Color::White)),
+                    ];
+                    if let Some(ref detail) = unit.detail {
+                        spans.push(Span::styled(
+                            format!("  ({})", detail),
+                            Style::default().fg(Color::DarkGray),
+                        ));
+                    }
+                    if let Some(ref fs) = unit.file_state {
+                        spans.push(Span::styled(
+                            format!("  [{}]", fs),
+                            Style::default().fg(file_state_color(fs)),
+                        ));
+                    }
+                    ListItem::new(Line::from(spans))
+                })
+                .collect();
 
-        let services_border_style = if app.show_logs {
-            Style::default().fg(Color::DarkGray)
-        } else {
-            Style::default()
-        };
+            let type_label = app.unit_type.label();
+            let title = if app.search_query.is_empty() && app.status_filter.is_none() && app.file_state_filter.is_none() {
+                format!("{} ({})", type_label, app.services.len())
+            } else {
+                format!(
+                    "{} ({}/{})",
+                    type_label,
+                    app.filtered_indices.len(),
+                    app.services.len()
+                )
+            };
 
-        let list = List::new(items)
-            .block(
-                Block::default()
-                    .borders(Borders::ALL)
-                    .title(title)
-                    .border_style(services_border_style),
-            )
-            .highlight_style(
-                Style::default()
-                    .bg(Color::DarkGray)
-                    .add_modifier(Modifier::BOLD),
-            )
-            .highlight_symbol(">> ");
+            let list = List::new(items)
+                .block(
+                    Block::default()
+                        .borders(Borders::ALL)
+                        .title(title),
+                )
+                .highlight_style(
+                    Style::default()
+                        .bg(Color::DarkGray)
+                        .add_modifier(Modifier::BOLD),
+                )
+                .highlight_symbol(">> ");
 
-        frame.render_stateful_widget(list, services_area, &mut app.list_state);
+            frame.render_stateful_widget(list, services_area, &mut app.list_state);
+        }
     }
 
     // Logs panel (only if visible)
@@ -324,9 +310,9 @@ pub fn render(frame: &mut Frame, app: &mut App) {
     } else if app.log_search_mode {
         "Type to search logs | Esc/Enter: Exit search | ?: Help & more"
     } else if app.show_logs && !app.log_search_query.is_empty() {
-        "l: Exit logs | j/k: Scroll | n/N: Next/Prev match | F: Follow | p: Priority | T: Time | /: Search | ?: Help & more"
+        "Esc: Back | j/k: Scroll | n/N: Next/Prev match | F: Follow | p: Priority | T: Time | /: Search | ?: Help & more"
     } else if app.show_logs {
-        "l: Exit logs | j/k: Scroll | g/G: Top/Bottom | F: Follow | /: Search | p: Priority | T: Time | ?: Help & more"
+        "Esc: Back | j/k: Scroll | g/G: Top/Bottom | F: Follow | /: Search | p: Priority | T: Time | ?: Help & more"
     } else if app.search_mode {
         "Type to search | Esc/Enter: Exit search | ?: Help & more"
     } else if !app.search_query.is_empty() || app.status_filter.is_some() || app.file_state_filter.is_some() {
@@ -816,17 +802,15 @@ pub fn get_logs_visible_lines(frame: &Frame, show_logs: bool) -> usize {
     ])
     .split(frame.area());
 
-    let middle_chunks = Layout::horizontal([
-        Constraint::Percentage(40),
-        Constraint::Percentage(60),
-    ])
-    .split(chunks[1]);
-
-    middle_chunks[1].height.saturating_sub(2) as usize
+    chunks[1].height.saturating_sub(2) as usize
 }
 
 /// Returns the number of visible lines in the services list
 pub fn get_services_visible_lines(frame: &Frame, show_logs: bool) -> usize {
+    if show_logs {
+        return 0;
+    }
+
     let chunks = Layout::vertical([
         Constraint::Length(3),
         Constraint::Min(1),
@@ -834,18 +818,7 @@ pub fn get_services_visible_lines(frame: &Frame, show_logs: bool) -> usize {
     ])
     .split(frame.area());
 
-    let services_area = if show_logs {
-        let middle_chunks = Layout::horizontal([
-            Constraint::Percentage(40),
-            Constraint::Percentage(60),
-        ])
-        .split(chunks[1]);
-        middle_chunks[0]
-    } else {
-        chunks[1]
-    };
-
-    services_area.height.saturating_sub(2) as usize
+    chunks[1].height.saturating_sub(2) as usize
 }
 
 /// Returns the number of visible lines in the details modal
@@ -1488,15 +1461,12 @@ mod tests {
     fn test_layout_regions_with_logs() {
         let area = Rect::new(0, 0, 100, 50);
         let regions = get_layout_regions(area, true);
-        // Services takes ~40%, logs ~60%
-        assert!(regions.services_list.width < 100);
+        // Logs take full middle area
         assert!(regions.logs_panel.is_some());
         let logs = regions.logs_panel.unwrap();
-        assert!(logs.width > 0);
-        assert_eq!(
-            regions.services_list.width + logs.width,
-            100
-        );
+        assert_eq!(logs.width, 100);
+        // services_list gets the same rect (unused when logs shown)
+        assert_eq!(regions.services_list.width, 100);
     }
 
     #[test]
