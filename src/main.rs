@@ -275,10 +275,10 @@ fn main() -> io::Result<()> {
                     KeyCode::Char('p') => {
                         app.open_priority_picker();
                     }
-                    KeyCode::Char('T') => {
+                    KeyCode::Char('t') => {
                         app.open_time_picker();
                     }
-                    KeyCode::Char('F') => {
+                    KeyCode::Char('f') => {
                         app.toggle_live_tail();
                     }
                     _ => {}
