@@ -33,11 +33,16 @@ fn main() -> io::Result<()> {
 
         let poll_timeout = if app.action_in_progress {
             Duration::from_millis(100)
+        } else if app.live_tail && app.show_logs {
+            Duration::from_secs(2)
         } else {
             Duration::from_secs(60)
         };
 
         if !event::poll(poll_timeout)? {
+            if app.live_tail && app.show_logs {
+                app.refresh_logs();
+            }
             continue;
         }
 
@@ -230,6 +235,7 @@ fn main() -> io::Result<()> {
                         if !app.log_search_query.is_empty() {
                             app.clear_log_search();
                         } else {
+                            app.live_tail = false;
                             app.show_logs = false;
                         }
                     }
@@ -271,6 +277,9 @@ fn main() -> io::Result<()> {
                     }
                     KeyCode::Char('T') => {
                         app.open_time_picker();
+                    }
+                    KeyCode::Char('F') => {
+                        app.toggle_live_tail();
                     }
                     _ => {}
                 }

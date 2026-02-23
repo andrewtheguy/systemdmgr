@@ -2,7 +2,7 @@ use ratatui::{
     layout::{Constraint, Layout, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, Clear, List, ListItem, Paragraph, Wrap},
+    widgets::{Block, Borders, Clear, List, ListItem, Paragraph},
     Frame,
 };
 
@@ -214,11 +214,20 @@ pub fn render(frame: &mut Frame, app: &mut App) {
         if app.log_time_range != TimeRange::All {
             logs_title.push_str(&format!(" [t:{}]", app.log_time_range.label()));
         }
+        if app.live_tail {
+            logs_title.push_str(" [LIVE]");
+        }
 
         let focused_suffix = " [FOCUSED]";
 
         // Calculate visible area (subtract 2 for borders)
         let visible_lines = logs_area.height.saturating_sub(2) as usize;
+
+        // Clamp scroll so "go to bottom" (usize::MAX sentinel) works without knowing screen height at load time
+        let max_scroll = app.logs.len().saturating_sub(visible_lines);
+        if app.logs_scroll > max_scroll {
+            app.logs_scroll = max_scroll;
+        }
 
         // Create log content with scroll, search highlighting, and boot separators
         let mut log_lines: Vec<Line> = Vec::new();
@@ -284,7 +293,7 @@ pub fn render(frame: &mut Frame, app: &mut App) {
                     .title(format!("{}{}{}", logs_title, focused_suffix, scroll_info))
                     .border_style(border_style),
             )
-            .wrap(Wrap { trim: false });
+;
 
         frame.render_widget(logs_paragraph, logs_area);
     }
@@ -315,9 +324,9 @@ pub fn render(frame: &mut Frame, app: &mut App) {
     } else if app.log_search_mode {
         "Type to search logs | Esc/Enter: Exit search | ?: Help & more"
     } else if app.show_logs && !app.log_search_query.is_empty() {
-        "l: Exit logs | j/k: Scroll | n/N: Next/Prev match | p: Priority | T: Time | /: Search | ?: Help & more"
+        "l: Exit logs | j/k: Scroll | n/N: Next/Prev match | F: Follow | p: Priority | T: Time | /: Search | ?: Help & more"
     } else if app.show_logs {
-        "l: Exit logs | j/k: Scroll | g/G: Top/Bottom | /: Search | p: Priority | T: Time | ?: Help & more"
+        "l: Exit logs | j/k: Scroll | g/G: Top/Bottom | F: Follow | /: Search | p: Priority | T: Time | ?: Help & more"
     } else if app.search_mode {
         "Type to search | Esc/Enter: Exit search | ?: Help & more"
     } else if !app.search_query.is_empty() || app.status_filter.is_some() || app.file_state_filter.is_some() {
@@ -564,6 +573,7 @@ fn render_help(frame: &mut Frame, app: &App) {
             Line::from("  T             Time range filter"),
             Line::from(""),
             Line::from(vec![Span::styled("General", section_style)]),
+            Line::from("  F             Toggle live tail (auto-refresh)"),
             Line::from("  l             Exit logs"),
             Line::from("  Esc           Clear search / Exit logs"),
             Line::from("  ?             Toggle this help"),

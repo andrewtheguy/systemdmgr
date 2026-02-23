@@ -4,9 +4,9 @@ use std::sync::mpsc;
 use ratatui::widgets::ListState;
 
 use crate::service::{
-    execute_unit_action, fetch_log_entries, fetch_unit_properties, fetch_units, LogEntry,
-    SystemdUnit, TimeRange, UnitAction, UnitProperties, UnitType, FILE_STATE_OPTIONS, TIME_RANGES,
-    UNIT_TYPES,
+    execute_unit_action, fetch_log_entries, fetch_log_entries_after_cursor, fetch_unit_properties,
+    fetch_units, LogEntry, SystemdUnit, TimeRange, UnitAction, UnitProperties, UnitType,
+    FILE_STATE_OPTIONS, TIME_RANGES, UNIT_TYPES,
 };
 
 pub struct App {
@@ -62,6 +62,7 @@ pub struct App {
     pub action_result: Option<Result<String, String>>,
     pub action_receiver: Option<mpsc::Receiver<Result<String, String>>>,
     pub status_message: Option<String>,
+    pub live_tail: bool,
 }
 
 impl App {
@@ -116,6 +117,7 @@ impl App {
             action_result: None,
             action_receiver: None,
             status_message: None,
+            live_tail: false,
         };
         app.load_services();
         app
@@ -426,7 +428,7 @@ impl App {
                     Ok(logs) => {
                         self.logs = logs;
                         if !self.logs.is_empty() {
-                            self.logs_scroll = self.logs.len().saturating_sub(1);
+                            self.logs_scroll = usize::MAX;
                         }
                     }
                     Err(e) => {
@@ -437,6 +439,7 @@ impl App {
                             identifier: None,
                             message: format!("Error fetching logs: {}", e),
                             boot_id: None,
+                            cursor: None,
                         }];
                     }
                 }
@@ -463,6 +466,36 @@ impl App {
 
     pub fn toggle_logs(&mut self) {
         self.show_logs = !self.show_logs;
+        if !self.show_logs {
+            self.live_tail = false;
+        }
+    }
+
+    pub fn toggle_live_tail(&mut self) {
+        self.live_tail = !self.live_tail;
+    }
+
+    pub fn refresh_logs(&mut self) {
+        let unit = match self.last_selected_service.as_ref() {
+            Some(u) => u.clone(),
+            None => return,
+        };
+        let cursor = match self.logs.last().and_then(|e| e.cursor.as_ref()) {
+            Some(c) => c.clone(),
+            None => return,
+        };
+        if let Ok(new_entries) = fetch_log_entries_after_cursor(
+            &unit,
+            &cursor,
+            self.user_mode,
+            self.log_priority_filter,
+            self.log_time_range,
+        )
+            && !new_entries.is_empty()
+        {
+            self.logs.extend(new_entries);
+            self.logs_scroll = usize::MAX;
+        }
     }
 
     pub fn toggle_help(&mut self) {
@@ -782,6 +815,7 @@ mod tests {
             identifier: None,
             message: message.into(),
             boot_id: None,
+            cursor: None,
         }
     }
 
@@ -837,6 +871,7 @@ mod tests {
             action_result: None,
             action_receiver: None,
             status_message: None,
+            live_tail: false,
         };
         if !app.filtered_indices.is_empty() {
             app.list_state.select(Some(0));
@@ -1535,6 +1570,26 @@ mod tests {
         assert!(app.show_help);
         app.toggle_help();
         assert!(!app.show_help);
+    }
+
+    #[test]
+    fn test_toggle_live_tail() {
+        let mut app = test_app_with_subs(&["running"]);
+        assert!(!app.live_tail);
+        app.toggle_live_tail();
+        assert!(app.live_tail);
+        app.toggle_live_tail();
+        assert!(!app.live_tail);
+    }
+
+    #[test]
+    fn test_toggle_logs_disables_live_tail() {
+        let mut app = test_app_with_subs(&["running"]);
+        app.show_logs = true;
+        app.live_tail = true;
+        app.toggle_logs(); // turns off logs
+        assert!(!app.show_logs);
+        assert!(!app.live_tail);
     }
 
     // Phase 1 — User mode

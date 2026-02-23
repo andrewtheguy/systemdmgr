@@ -62,6 +62,7 @@ pub struct LogEntry {
     pub identifier: Option<String>,
     pub message: String,
     pub boot_id: Option<String>,
+    pub cursor: Option<String>,
 }
 
 pub const PRIORITY_LABELS: [&str; 8] = [
@@ -336,6 +337,45 @@ pub fn fetch_log_entries(
     Ok(entries)
 }
 
+pub fn fetch_log_entries_after_cursor(
+    unit_name: &str,
+    cursor: &str,
+    user_mode: bool,
+    priority: Option<u8>,
+    time_range: TimeRange,
+) -> Result<Vec<LogEntry>, String> {
+    let unit_flag = if user_mode { "--user-unit" } else { "-u" };
+    let after_cursor = format!("--after-cursor={}", cursor);
+    let mut args = vec![unit_flag, unit_name, &after_cursor, "--no-pager", "--output=json"];
+
+    let priority_str;
+    if let Some(p) = priority {
+        priority_str = p.to_string();
+        args.push("-p");
+        args.push(&priority_str);
+    }
+
+    let since_value;
+    if let Some(since) = time_range.journalctl_since() {
+        since_value = since.to_string();
+        args.push("--since");
+        args.push(&since_value);
+    }
+
+    let output = Command::new("journalctl")
+        .args(&args)
+        .output()
+        .map_err(|e| format!("Failed to execute journalctl: {}", e))?;
+
+    let entries = String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .filter(|line| !line.is_empty())
+        .map(parse_journal_json_line)
+        .collect();
+
+    Ok(entries)
+}
+
 fn parse_journal_json_line(line: &str) -> LogEntry {
     let Ok(val) = serde_json::from_str::<serde_json::Value>(line) else {
         return LogEntry {
@@ -345,6 +385,7 @@ fn parse_journal_json_line(line: &str) -> LogEntry {
             identifier: None,
             message: line.to_string(),
             boot_id: None,
+            cursor: None,
         };
     };
 
@@ -374,6 +415,8 @@ fn parse_journal_json_line(line: &str) -> LogEntry {
 
     let boot_id = val["_BOOT_ID"].as_str().map(|s| s.to_string());
 
+    let cursor = val["__CURSOR"].as_str().map(|s| s.to_string());
+
     LogEntry {
         timestamp,
         priority,
@@ -381,6 +424,7 @@ fn parse_journal_json_line(line: &str) -> LogEntry {
         identifier,
         message,
         boot_id,
+        cursor,
     }
 }
 
