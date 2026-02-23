@@ -276,6 +276,7 @@ fn main() -> io::Result<()> {
                 }
             } else {
                 // Branch 4: Service normal mode
+                app.clear_status_message();
                 match key.code {
                     KeyCode::Char('q') => {
                         app.should_quit = true;
@@ -305,6 +306,9 @@ fn main() -> io::Result<()> {
                     }
                     KeyCode::Char('r') => {
                         app.load_services();
+                        if app.error.is_none() {
+                            app.status_message = Some("Refreshed".into());
+                        }
                     }
                     KeyCode::Char('u') => {
                         app.toggle_user_mode();
@@ -328,11 +332,9 @@ fn main() -> io::Result<()> {
                         app.open_file_state_picker();
                     }
                     KeyCode::Char('x') => {
-                        app.clear_status_message();
                         app.open_action_picker();
                     }
                     KeyCode::Char('R') => {
-                        app.clear_status_message();
                         app.confirm_action = Some(service::UnitAction::DaemonReload);
                         app.confirm_unit_name = Some(String::new());
                         app.show_confirm = true;

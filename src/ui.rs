@@ -313,17 +313,17 @@ pub fn render(frame: &mut Frame, app: &mut App) {
     } else if app.show_file_state_picker {
         "j/k: Navigate | Enter: Select | Esc/f: Close"
     } else if app.log_search_mode {
-        "Type to search logs | Esc/Enter: Exit search | ?: Help"
+        "Type to search logs | Esc/Enter: Exit search | ?: Help & more"
     } else if app.show_logs && !app.log_search_query.is_empty() {
-        "l: Exit logs | j/k: Scroll | n/N: Next/Prev match | p: Priority | T: Time | /: Search | ?: Help"
+        "l: Exit logs | j/k: Scroll | n/N: Next/Prev match | p: Priority | T: Time | /: Search | ?: Help & more"
     } else if app.show_logs {
-        "l: Exit logs | j/k: Scroll | g/G: Top/Bottom | /: Search | p: Priority | T: Time | ?: Help"
+        "l: Exit logs | j/k: Scroll | g/G: Top/Bottom | /: Search | p: Priority | T: Time | ?: Help & more"
     } else if app.search_mode {
-        "Type to search | Esc/Enter: Exit search | ?: Help"
+        "Type to search | Esc/Enter: Exit search | ?: Help & more"
     } else if !app.search_query.is_empty() || app.status_filter.is_some() || app.file_state_filter.is_some() {
-        "q: Quit | /: Search | s: Status | f: File state | x: Actions | i: Details | t: Type | l: Logs | u: User/System | Esc: Clear | ?: Help"
+        "q: Quit | /: Search | s: Status | f: File state | x: Actions | i: Details | t: Type | l: Logs | r: Refresh | u: User/System | Esc: Clear | ?: Help & more"
     } else {
-        "q/Esc: Quit | /: Search | s: Status | f: File state | x: Actions | i: Details | t: Type | l: Logs | u: User/System | ?: Help"
+        "q/Esc: Quit | /: Search | s: Status | f: File state | x: Actions | i: Details | t: Type | l: Logs | r: Refresh | u: User/System | ?: Help & more"
     };
     let footer = Paragraph::new(footer_text)
         .style(Style::default().fg(Color::DarkGray))
