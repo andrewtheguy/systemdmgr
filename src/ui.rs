@@ -5,6 +5,7 @@ use ratatui::{
     widgets::{Block, Borders, Clear, List, ListItem, Paragraph, Wrap},
     Frame,
 };
+use unicode_width::UnicodeWidthStr;
 
 use crate::app::App;
 use crate::service::{
@@ -303,7 +304,7 @@ pub fn render(frame: &mut Frame, app: &mut App, live_indicator_on: bool) {
                         .map(|ts| format!(" · {}", format_log_timestamp(ts)))
                         .unwrap_or_default();
                     let label = format!(" Boot {} {} ", short_id, boot_ts);
-                    let pad_total = content_width.saturating_sub(label.len());
+                    let pad_total = content_width.saturating_sub(label.width());
                     let pad_left = pad_total / 2;
                     let pad_right = pad_total - pad_left;
                     let separator = format!(
@@ -328,7 +329,7 @@ pub fn render(frame: &mut Frame, app: &mut App, live_indicator_on: bool) {
                         .map(|ts| format!(" · {}", format_log_timestamp(ts)))
                         .unwrap_or_default();
                     let label = format!(" Restarted {} ", restart_ts);
-                    let pad_total = content_width.saturating_sub(label.len());
+                    let pad_total = content_width.saturating_sub(label.width());
                     let pad_left = pad_total / 2;
                     let pad_right = pad_total - pad_left;
                     let separator = format!(
