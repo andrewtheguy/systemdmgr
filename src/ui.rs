@@ -256,9 +256,6 @@ pub fn render(frame: &mut Frame, app: &mut App) {
         if app.log_time_range != TimeRange::All {
             logs_title.push_str(&format!(" [t:{}]", app.log_time_range.label()));
         }
-        if app.live_tail {
-            logs_title.push_str(" [LIVE]");
-        }
 
         let focused_suffix = " [FOCUSED]";
 
@@ -366,6 +363,20 @@ pub fn render(frame: &mut Frame, app: &mut App) {
             String::new()
         };
 
+        let mut title_spans = vec![Span::raw(logs_title)];
+        if app.live_tail {
+            let pulse_on = app.live_indicator_on;
+            let live_style = if pulse_on {
+                Style::default().fg(Color::LightGreen)
+            } else {
+                Style::default().fg(Color::DarkGray)
+            };
+            title_spans.push(Span::raw(" "));
+            title_spans.push(Span::styled("[LIVE]".to_string(), live_style));
+        }
+        title_spans.push(Span::raw(focused_suffix));
+        title_spans.push(Span::raw(scroll_info.clone()));
+
         let border_style = Style::default().fg(Color::Yellow);
 
         let logs_paragraph = Paragraph::new(log_lines)
@@ -373,7 +384,7 @@ pub fn render(frame: &mut Frame, app: &mut App) {
             .block(
                 Block::default()
                     .borders(Borders::ALL)
-                    .title(format!("{}{}{}", logs_title, focused_suffix, scroll_info))
+                    .title(Line::from(title_spans))
                     .border_style(border_style),
             )
             .wrap(Wrap { trim: false });
