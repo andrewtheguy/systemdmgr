@@ -61,6 +61,7 @@ pub struct App {
     pub action_in_progress: bool,
     pub action_result: Option<Result<String, String>>,
     pub action_receiver: Option<mpsc::Receiver<Result<String, String>>>,
+    pub refresh_receiver: Option<mpsc::Receiver<Vec<SystemdUnit>>>,
     pub status_message: Option<String>,
     pub live_tail: bool,
     pub last_refreshed: Option<chrono::DateTime<chrono::Local>>,
@@ -117,6 +118,7 @@ impl App {
             action_in_progress: false,
             action_result: None,
             action_receiver: None,
+            refresh_receiver: None,
             status_message: None,
             live_tail: false,
             last_refreshed: None,
@@ -748,12 +750,18 @@ impl App {
         {
             let unit_name = unit_name.clone();
             let user_mode = self.user_mode;
-            let (tx, rx) = mpsc::channel();
+            let unit_type = self.unit_type;
+            let (action_tx, action_rx) = mpsc::channel();
+            let (refresh_tx, refresh_rx) = mpsc::channel();
             self.action_in_progress = true;
-            self.action_receiver = Some(rx);
+            self.action_receiver = Some(action_rx);
+            self.refresh_receiver = Some(refresh_rx);
             std::thread::spawn(move || {
                 let result = execute_unit_action(action, &unit_name, user_mode);
-                let _ = tx.send(result);
+                let _ = action_tx.send(result);
+                if let Ok(units) = fetch_units(unit_type, user_mode) {
+                    let _ = refresh_tx.send(units);
+                }
             });
         }
     }
@@ -765,10 +773,18 @@ impl App {
             self.action_in_progress = false;
             self.action_result = Some(result);
             self.action_receiver = None;
-            self.load_services();
             if self.show_logs {
                 self.mark_logs_dirty();
             }
+        }
+        if let Some(ref rx) = self.refresh_receiver
+            && let Ok(units) = rx.try_recv()
+        {
+            self.refresh_receiver = None;
+            self.properties_cache.clear();
+            self.services = units;
+            self.last_refreshed = Some(chrono::Local::now());
+            self.update_filter();
         }
     }
 
@@ -876,6 +892,7 @@ mod tests {
             action_in_progress: false,
             action_result: None,
             action_receiver: None,
+            refresh_receiver: None,
             status_message: None,
             live_tail: false,
             last_refreshed: None,
