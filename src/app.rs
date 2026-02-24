@@ -464,7 +464,7 @@ impl App {
         self.logs_scroll = self.logs_scroll.saturating_sub(amount);
     }
 
-    pub fn scroll_logs_down(&mut self, amount: usize, _visible_lines: usize) {
+    pub fn scroll_logs_down(&mut self, amount: usize) {
         if !self.logs.is_empty() {
             let max_scroll = self.logs.len().saturating_sub(1);
             self.logs_scroll = self.logs_scroll.saturating_add(amount).min(max_scroll);
@@ -595,7 +595,7 @@ impl App {
         self.logs_scroll = 0;
     }
 
-    pub fn logs_go_to_bottom(&mut self, _visible_lines: usize) {
+    pub fn logs_go_to_bottom(&mut self) {
         if !self.logs.is_empty() {
             // Sentinel value resolved by UI once panel dimensions are known.
             self.logs_scroll = usize::MAX;
@@ -799,6 +799,7 @@ impl App {
         self.action_in_progress = false;
         self.action_result = None;
         self.action_receiver = None;
+        self.refresh_receiver = None;
     }
 
     pub fn dismiss_action_result(&mut self) {
@@ -808,6 +809,7 @@ impl App {
         self.action_in_progress = false;
         self.action_result = None;
         self.action_receiver = None;
+        self.refresh_receiver = None;
     }
 
     pub fn clear_status_message(&mut self) {
@@ -1695,7 +1697,7 @@ mod tests {
             make_log("e"),
         ];
         app.logs_scroll = 0;
-        app.scroll_logs_down(1, 3); // visible_lines = 3
+        app.scroll_logs_down(1);
         assert_eq!(app.logs_scroll, 1);
     }
 
@@ -1704,14 +1706,14 @@ mod tests {
         let mut app = test_app_with_subs(&["running"]);
         app.logs = vec![make_log("a"), make_log("b"), make_log("c")];
         app.logs_scroll = 0;
-        app.scroll_logs_down(100, 2); // max index = 2
+        app.scroll_logs_down(100);
         assert_eq!(app.logs_scroll, 2);
     }
 
     #[test]
     fn test_scroll_logs_down_empty() {
         let mut app = test_app_with_subs(&["running"]);
-        app.scroll_logs_down(1, 10);
+        app.scroll_logs_down(1);
         assert_eq!(app.logs_scroll, 0);
     }
 
@@ -1735,7 +1737,7 @@ mod tests {
             make_log("e"),
         ];
         app.logs_scroll = 0;
-        app.logs_go_to_bottom(3);
+        app.logs_go_to_bottom();
         assert_eq!(app.logs_scroll, usize::MAX);
     }
 

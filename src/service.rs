@@ -1169,6 +1169,20 @@ mod tests {
         assert_eq!(entry.boot_id, None);
     }
 
+    #[test]
+    fn test_parse_invocation_id_present() {
+        let line = r#"{"MESSAGE":"hello","_SYSTEMD_INVOCATION_ID":"0123456789abcdef"}"#;
+        let entry = parse_journal_json_line(line);
+        assert_eq!(entry.invocation_id.as_deref(), Some("0123456789abcdef"));
+    }
+
+    #[test]
+    fn test_parse_invocation_id_missing() {
+        let line = r#"{"MESSAGE":"hello"}"#;
+        let entry = parse_journal_json_line(line);
+        assert_eq!(entry.invocation_id, None);
+    }
+
     // Phase 3 — format_log_timestamp
 
     #[test]

@@ -269,7 +269,7 @@ fn main() -> io::Result<()> {
                         app.scroll_logs_up(visible_lines);
                     }
                     KeyCode::PageDown => {
-                        app.scroll_logs_down(visible_lines, visible_lines);
+                        app.scroll_logs_down(visible_lines);
                     }
                     KeyCode::Char(c) => {
                         app.log_search_query.push(c);
@@ -302,7 +302,7 @@ fn main() -> io::Result<()> {
                         app.prev_log_match(visible_lines);
                     }
                     KeyCode::Char('j') | KeyCode::Down => {
-                        app.scroll_logs_down(1, visible_lines);
+                        app.scroll_logs_down(1);
                     }
                     KeyCode::Char('k') | KeyCode::Up => {
                         app.scroll_logs_up(1);
@@ -311,19 +311,19 @@ fn main() -> io::Result<()> {
                         app.logs_go_to_top();
                     }
                     KeyCode::Char('G') | KeyCode::End => {
-                        app.logs_go_to_bottom(visible_lines);
+                        app.logs_go_to_bottom();
                     }
                     KeyCode::PageUp => {
                         app.scroll_logs_up(visible_lines);
                     }
                     KeyCode::PageDown => {
-                        app.scroll_logs_down(visible_lines, visible_lines);
+                        app.scroll_logs_down(visible_lines);
                     }
                     KeyCode::Char('u') if key.modifiers.contains(KeyModifiers::CONTROL) => {
                         app.scroll_logs_up(visible_lines / 2);
                     }
                     KeyCode::Char('d') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                        app.scroll_logs_down(visible_lines / 2, visible_lines);
+                        app.scroll_logs_down(visible_lines / 2);
                     }
                     KeyCode::Char('p') => {
                         app.open_priority_picker();
@@ -460,14 +460,13 @@ fn handle_mouse_event(app: &mut App, mouse: MouseEvent, frame_size: Rect) {
 
     if app.show_logs {
         // Log mode: all scroll events go to logs, clicks are ignored
-        if let Some(logs) = regions.logs_panel {
-            let visible = logs.height.saturating_sub(2) as usize;
+        if regions.logs_panel.is_some() {
             match mouse.kind {
                 MouseEventKind::ScrollUp => {
                     app.scroll_logs_up(3);
                 }
                 MouseEventKind::ScrollDown => {
-                    app.scroll_logs_down(3, visible);
+                    app.scroll_logs_down(3);
                 }
                 _ => {}
             }
