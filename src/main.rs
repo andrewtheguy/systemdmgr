@@ -54,7 +54,7 @@ fn main() -> io::Result<()> {
         let poll_timeout = if app.action_in_progress {
             Duration::from_millis(100)
         } else if app.live_tail && app.show_logs {
-            Duration::from_secs(2)
+            Duration::from_millis(500)
         } else {
             Duration::from_secs(60)
         };
