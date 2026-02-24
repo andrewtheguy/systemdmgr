@@ -372,14 +372,9 @@ impl App {
         if self.filtered_indices.is_empty() {
             return;
         }
+        let max_index = self.filtered_indices.len() - 1;
         let i = match self.list_state.selected() {
-            Some(i) => {
-                if i >= self.filtered_indices.len() - 1 {
-                    0
-                } else {
-                    i + 1
-                }
-            }
+            Some(i) => i.min(max_index).saturating_add(1).min(max_index),
             None => 0,
         };
         self.list_state.select(Some(i));
@@ -389,14 +384,9 @@ impl App {
         if self.filtered_indices.is_empty() {
             return;
         }
+        let max_index = self.filtered_indices.len() - 1;
         let i = match self.list_state.selected() {
-            Some(i) => {
-                if i == 0 {
-                    self.filtered_indices.len() - 1
-                } else {
-                    i - 1
-                }
-            }
+            Some(i) => i.min(max_index).saturating_sub(1),
             None => 0,
         };
         self.list_state.select(Some(i));
@@ -954,11 +944,11 @@ mod tests {
     }
 
     #[test]
-    fn test_next_wraps_at_end() {
+    fn test_next_clamps_at_end() {
         let mut app = test_app_with_subs(&["running", "exited"]);
         app.list_state.select(Some(1));
         app.next();
-        assert_eq!(app.list_state.selected(), Some(0));
+        assert_eq!(app.list_state.selected(), Some(1));
     }
 
     #[test]
@@ -987,11 +977,11 @@ mod tests {
     }
 
     #[test]
-    fn test_previous_wraps_at_top() {
+    fn test_previous_clamps_at_top() {
         let mut app = test_app_with_subs(&["running", "exited"]);
         app.list_state.select(Some(0));
         app.previous();
-        assert_eq!(app.list_state.selected(), Some(1));
+        assert_eq!(app.list_state.selected(), Some(0));
     }
 
     #[test]
