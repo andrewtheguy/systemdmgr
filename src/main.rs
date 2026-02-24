@@ -330,6 +330,9 @@ fn main() -> io::Result<()> {
                     KeyCode::Char('t') => {
                         app.open_time_picker();
                     }
+                    KeyCode::Char('x') => {
+                        app.open_action_picker();
+                    }
                     KeyCode::Char('f') => {
                         app.toggle_live_tail();
                         if app.live_tail {
