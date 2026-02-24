@@ -64,7 +64,6 @@ pub struct App {
     pub refresh_receiver: Option<mpsc::Receiver<Vec<SystemdUnit>>>,
     pub status_message: Option<String>,
     pub live_tail: bool,
-    pub live_indicator_on: bool,
     pub last_refreshed: Option<chrono::DateTime<chrono::Local>>,
 }
 
@@ -122,7 +121,6 @@ impl App {
             refresh_receiver: None,
             status_message: None,
             live_tail: false,
-            live_indicator_on: true,
             last_refreshed: None,
         };
         app.load_services();
@@ -474,7 +472,9 @@ impl App {
 
     pub fn toggle_logs(&mut self) {
         self.show_logs = !self.show_logs;
-        if !self.show_logs {
+        if self.show_logs {
+            self.live_tail = true;
+        } else {
             self.live_tail = false;
             self.last_selected_service = None;
         }
@@ -482,7 +482,6 @@ impl App {
 
     pub fn toggle_live_tail(&mut self) {
         self.live_tail = !self.live_tail;
-        self.live_indicator_on = true;
     }
 
     pub fn refresh_logs(&mut self) {
@@ -899,7 +898,6 @@ mod tests {
             refresh_receiver: None,
             status_message: None,
             live_tail: false,
-            live_indicator_on: true,
             last_refreshed: None,
         };
         if !app.filtered_indices.is_empty() {
@@ -1585,10 +1583,13 @@ mod tests {
     fn test_toggle_logs() {
         let mut app = test_app_with_subs(&["running"]);
         assert!(!app.show_logs);
+        assert!(!app.live_tail);
         app.toggle_logs();
         assert!(app.show_logs);
+        assert!(app.live_tail);
         app.toggle_logs();
         assert!(!app.show_logs);
+        assert!(!app.live_tail);
     }
 
     #[test]

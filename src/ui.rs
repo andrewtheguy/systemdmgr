@@ -46,7 +46,7 @@ pub fn get_layout_regions(area: Rect, show_logs: bool) -> LayoutRegions {
     }
 }
 
-pub fn render(frame: &mut Frame, app: &mut App) {
+pub fn render(frame: &mut Frame, app: &mut App, live_indicator_on: bool) {
     // Load logs for selected service if selection changed (only if logs are visible)
     if app.show_logs {
         app.load_logs_for_selected();
@@ -366,7 +366,7 @@ pub fn render(frame: &mut Frame, app: &mut App) {
 
         let mut title_spans = vec![Span::raw(logs_title)];
         if app.live_tail {
-            let pulse_on = app.live_indicator_on;
+            let pulse_on = live_indicator_on;
             let live_style = if pulse_on {
                 Style::default().fg(Color::LightGreen)
             } else {

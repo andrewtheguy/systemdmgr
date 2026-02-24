@@ -50,13 +50,14 @@ fn main() -> io::Result<()> {
     let mut app = App::new();
     let mut last_live_tail_refresh = Instant::now();
     let mut last_live_indicator_blink = Instant::now();
+    let mut live_indicator_on = true;
 
     loop {
         app.check_action_progress();
 
         if app.live_tail && app.show_logs {
             while last_live_indicator_blink.elapsed() >= LIVE_INDICATOR_BLINK_INTERVAL {
-                app.live_indicator_on = !app.live_indicator_on;
+                live_indicator_on = !live_indicator_on;
                 last_live_indicator_blink += LIVE_INDICATOR_BLINK_INTERVAL;
             }
 
@@ -67,12 +68,12 @@ fn main() -> io::Result<()> {
                 }
             }
         } else {
-            app.live_indicator_on = true;
+            live_indicator_on = true;
             last_live_tail_refresh = Instant::now();
             last_live_indicator_blink = Instant::now();
         }
 
-        terminal.draw(|frame| ui::render(frame, &mut app))?;
+        terminal.draw(|frame| ui::render(frame, &mut app, live_indicator_on))?;
 
         let mut poll_timeout = if app.action_in_progress {
             Duration::from_millis(100)
@@ -339,6 +340,7 @@ fn main() -> io::Result<()> {
                             app.refresh_logs();
                             last_live_tail_refresh = Instant::now();
                             last_live_indicator_blink = Instant::now();
+                            live_indicator_on = true;
                         }
                     }
                     _ => {}
