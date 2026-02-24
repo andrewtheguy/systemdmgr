@@ -3,7 +3,7 @@ mod service;
 mod ui;
 
 use std::io::{self, stdout};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use crossterm::{
     event::{
@@ -16,6 +16,8 @@ use crossterm::{
 use ratatui::{prelude::*, Terminal};
 
 use app::App;
+
+const LIVE_TAIL_REFRESH_INTERVAL: Duration = Duration::from_millis(500);
 
 fn main() -> io::Result<()> {
     let args: Vec<String> = std::env::args().collect();
@@ -45,24 +47,31 @@ fn main() -> io::Result<()> {
     let mut terminal = Terminal::new(backend)?;
 
     let mut app = App::new();
+    let mut last_live_tail_refresh = Instant::now();
 
     loop {
         terminal.draw(|frame| ui::render(frame, &mut app))?;
 
         app.check_action_progress();
 
+        if app.live_tail && app.show_logs {
+            if last_live_tail_refresh.elapsed() >= LIVE_TAIL_REFRESH_INTERVAL {
+                app.refresh_logs();
+                last_live_tail_refresh = Instant::now();
+            }
+        } else {
+            last_live_tail_refresh = Instant::now();
+        }
+
         let poll_timeout = if app.action_in_progress {
             Duration::from_millis(100)
         } else if app.live_tail && app.show_logs {
-            Duration::from_millis(500)
+            LIVE_TAIL_REFRESH_INTERVAL.saturating_sub(last_live_tail_refresh.elapsed())
         } else {
             Duration::from_secs(60)
         };
 
         if !event::poll(poll_timeout)? {
-            if app.live_tail && app.show_logs {
-                app.refresh_logs();
-            }
             continue;
         }
 
@@ -306,6 +315,10 @@ fn main() -> io::Result<()> {
                     }
                     KeyCode::Char('f') => {
                         app.toggle_live_tail();
+                        if app.live_tail {
+                            app.refresh_logs();
+                            last_live_tail_refresh = Instant::now();
+                        }
                     }
                     _ => {}
                 }
