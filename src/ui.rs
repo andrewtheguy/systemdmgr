@@ -271,7 +271,8 @@ pub fn render(frame: &mut Frame, app: &mut App) {
         } else if app.logs.is_empty() {
             app.logs_scroll = 0;
         } else {
-            app.logs_scroll = app.logs_scroll.min(app.logs.len() - 1);
+            // Prevent overscrolling into trailing blank space.
+            app.logs_scroll = app.logs_scroll.min(bottom_scroll);
         }
 
         // Track the last seen invocation ID to detect service restarts across None gaps
