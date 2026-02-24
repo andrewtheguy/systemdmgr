@@ -18,6 +18,10 @@ pub struct App {
     pub search_mode: bool,
     pub filtered_indices: Vec<usize>,
     pub logs: Vec<LogEntry>,
+    pub cached_entry_heights: Vec<usize>,
+    pub cached_entry_heights_width: usize,
+    pub cached_entry_heights_query: String,
+    pub cached_entry_heights_dirty: bool,
     pub logs_scroll: usize,
     pub last_selected_service: Option<String>,
     pub status_filter: Option<String>,
@@ -78,6 +82,10 @@ impl App {
             search_mode: false,
             filtered_indices: Vec::new(),
             logs: Vec::new(),
+            cached_entry_heights: Vec::new(),
+            cached_entry_heights_width: 0,
+            cached_entry_heights_query: String::new(),
+            cached_entry_heights_dirty: true,
             logs_scroll: 0,
             last_selected_service: None,
             status_filter: None,
@@ -417,6 +425,7 @@ impl App {
         let current_service = self.selected_unit().map(|s| s.unit.clone());
 
         if current_service != self.last_selected_service || self.log_filters_dirty {
+            self.invalidate_log_entry_heights_cache();
             self.last_selected_service = current_service.clone();
             self.log_filters_dirty = false;
             self.logs_scroll = 0;
@@ -457,6 +466,10 @@ impl App {
 
     pub fn mark_logs_dirty(&mut self) {
         self.log_filters_dirty = true;
+    }
+
+    pub fn invalidate_log_entry_heights_cache(&mut self) {
+        self.cached_entry_heights_dirty = true;
     }
 
     pub fn scroll_logs_up(&mut self, amount: usize) {
@@ -504,6 +517,7 @@ impl App {
             && !new_entries.is_empty()
         {
             self.logs.extend(new_entries);
+            self.invalidate_log_entry_heights_cache();
             self.logs_scroll = usize::MAX;
         }
     }
@@ -532,6 +546,7 @@ impl App {
     }
 
     pub fn update_log_search(&mut self) {
+        self.invalidate_log_entry_heights_cache();
         self.log_search_matches.clear();
         self.log_search_match_index = None;
 
@@ -557,6 +572,7 @@ impl App {
         self.log_search_query.clear();
         self.log_search_matches.clear();
         self.log_search_match_index = None;
+        self.invalidate_log_entry_heights_cache();
     }
 
     pub fn next_log_match(&mut self, visible_lines: usize) {
@@ -606,6 +622,7 @@ impl App {
         self.user_mode = !self.user_mode;
         self.last_selected_service = None;
         self.logs.clear();
+        self.invalidate_log_entry_heights_cache();
         self.clear_log_search();
         self.log_priority_filter = None;
         self.log_time_range = TimeRange::All;
@@ -858,6 +875,10 @@ mod tests {
             search_mode: false,
             filtered_indices: (0..len).collect(),
             logs: Vec::new(),
+            cached_entry_heights: Vec::new(),
+            cached_entry_heights_width: 0,
+            cached_entry_heights_query: String::new(),
+            cached_entry_heights_dirty: true,
             logs_scroll: 0,
             last_selected_service: None,
             status_filter: None,

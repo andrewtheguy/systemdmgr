@@ -265,8 +265,8 @@ pub fn render(frame: &mut Frame, app: &mut App, live_indicator_on: bool) {
         let content_width = logs_area.width.saturating_sub(2) as usize;
 
         // Resolve "go to bottom" sentinel against wrapped visual lines.
-        let entry_heights = log_entry_visual_heights(app, content_width);
-        let bottom_scroll = bottom_scroll_index(&entry_heights, visible_lines);
+        ensure_log_entry_heights_cache(app, content_width);
+        let bottom_scroll = bottom_scroll_index(&app.cached_entry_heights, visible_lines);
         if app.logs_scroll == usize::MAX {
             app.logs_scroll = bottom_scroll;
         } else if app.logs.is_empty() {
@@ -367,17 +367,16 @@ pub fn render(frame: &mut Frame, app: &mut App, live_indicator_on: bool) {
 
         let mut title_spans = vec![Span::raw(logs_title)];
         if app.live_tail {
-            let pulse_on = live_indicator_on;
-            let live_style = if pulse_on {
+            let live_style = if live_indicator_on {
                 Style::default().fg(Color::LightGreen)
             } else {
                 Style::default().fg(Color::DarkGray)
             };
             title_spans.push(Span::raw(" "));
-            title_spans.push(Span::styled("[LIVE]".to_string(), live_style));
+            title_spans.push(Span::styled("[LIVE]", live_style));
         }
         title_spans.push(Span::raw(focused_suffix));
-        title_spans.push(Span::raw(scroll_info.clone()));
+        title_spans.push(Span::raw(scroll_info));
 
         let border_style = Style::default().fg(Color::Yellow);
 
@@ -515,6 +514,19 @@ fn wrapped_line_count(line: &Line<'_>, content_width: usize) -> usize {
         return 1;
     }
     line.width().max(1).div_ceil(content_width)
+}
+
+fn ensure_log_entry_heights_cache(app: &mut App, content_width: usize) {
+    if app.cached_entry_heights_dirty
+        || app.cached_entry_heights_width != content_width
+        || app.cached_entry_heights_query != app.log_search_query
+        || app.cached_entry_heights.len() != app.logs.len()
+    {
+        app.cached_entry_heights = log_entry_visual_heights(app, content_width);
+        app.cached_entry_heights_width = content_width;
+        app.cached_entry_heights_query = app.log_search_query.clone();
+        app.cached_entry_heights_dirty = false;
+    }
 }
 
 fn log_entry_visual_heights(app: &App, content_width: usize) -> Vec<usize> {
