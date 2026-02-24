@@ -18,7 +18,6 @@ use ratatui::{prelude::*, Terminal};
 use app::App;
 
 const LIVE_TAIL_REFRESH_INTERVAL: Duration = Duration::from_millis(500);
-const LIVE_INDICATOR_BLINK_INTERVAL: Duration = Duration::from_millis(500);
 
 fn main() -> io::Result<()> {
     let args: Vec<String> = std::env::args().collect();
@@ -51,14 +50,22 @@ fn main() -> io::Result<()> {
     let mut last_live_tail_refresh = Instant::now();
     let mut last_live_indicator_blink = Instant::now();
     let mut live_indicator_on = true;
+    let mut was_live_tail_active = false;
 
     loop {
         app.check_action_progress();
+        let live_tail_active = app.live_tail && app.show_logs;
 
-        if app.live_tail && app.show_logs {
-            while last_live_indicator_blink.elapsed() >= LIVE_INDICATOR_BLINK_INTERVAL {
+        if live_tail_active && !was_live_tail_active {
+            live_indicator_on = true;
+            last_live_tail_refresh = Instant::now();
+            last_live_indicator_blink = Instant::now();
+        }
+
+        if live_tail_active {
+            while last_live_indicator_blink.elapsed() >= LIVE_TAIL_REFRESH_INTERVAL {
                 live_indicator_on = !live_indicator_on;
-                last_live_indicator_blink += LIVE_INDICATOR_BLINK_INTERVAL;
+                last_live_indicator_blink += LIVE_TAIL_REFRESH_INTERVAL;
             }
 
             if last_live_tail_refresh.elapsed() >= LIVE_TAIL_REFRESH_INTERVAL {
@@ -67,11 +74,8 @@ fn main() -> io::Result<()> {
                     last_live_tail_refresh += LIVE_TAIL_REFRESH_INTERVAL;
                 }
             }
-        } else {
-            live_indicator_on = true;
-            last_live_tail_refresh = Instant::now();
-            last_live_indicator_blink = Instant::now();
         }
+        was_live_tail_active = live_tail_active;
 
         terminal.draw(|frame| ui::render(frame, &mut app, live_indicator_on))?;
 
@@ -81,11 +85,11 @@ fn main() -> io::Result<()> {
             Duration::from_secs(60)
         };
 
-        if app.live_tail && app.show_logs {
+        if live_tail_active {
             let refresh_wait =
                 LIVE_TAIL_REFRESH_INTERVAL.saturating_sub(last_live_tail_refresh.elapsed());
             let blink_wait =
-                LIVE_INDICATOR_BLINK_INTERVAL.saturating_sub(last_live_indicator_blink.elapsed());
+                LIVE_TAIL_REFRESH_INTERVAL.saturating_sub(last_live_indicator_blink.elapsed());
             poll_timeout = poll_timeout.min(refresh_wait.min(blink_wait));
         }
 
@@ -338,9 +342,6 @@ fn main() -> io::Result<()> {
                         app.toggle_live_tail();
                         if app.live_tail {
                             app.refresh_logs();
-                            last_live_tail_refresh = Instant::now();
-                            last_live_indicator_blink = Instant::now();
-                            live_indicator_on = true;
                         }
                     }
                     _ => {}
