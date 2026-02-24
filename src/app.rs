@@ -18,6 +18,10 @@ pub struct App {
     pub search_mode: bool,
     pub filtered_indices: Vec<usize>,
     pub logs: Vec<LogEntry>,
+    pub cached_entry_heights: Vec<usize>,
+    pub cached_entry_heights_width: usize,
+    pub cached_entry_heights_query: String,
+    pub cached_entry_heights_dirty: bool,
     pub logs_scroll: usize,
     pub last_selected_service: Option<String>,
     pub status_filter: Option<String>,
@@ -61,6 +65,7 @@ pub struct App {
     pub action_in_progress: bool,
     pub action_result: Option<Result<String, String>>,
     pub action_receiver: Option<mpsc::Receiver<Result<String, String>>>,
+    pub refresh_receiver: Option<mpsc::Receiver<Vec<SystemdUnit>>>,
     pub status_message: Option<String>,
     pub live_tail: bool,
     pub last_refreshed: Option<chrono::DateTime<chrono::Local>>,
@@ -77,6 +82,10 @@ impl App {
             search_mode: false,
             filtered_indices: Vec::new(),
             logs: Vec::new(),
+            cached_entry_heights: Vec::new(),
+            cached_entry_heights_width: 0,
+            cached_entry_heights_query: String::new(),
+            cached_entry_heights_dirty: true,
             logs_scroll: 0,
             last_selected_service: None,
             status_filter: None,
@@ -117,6 +126,7 @@ impl App {
             action_in_progress: false,
             action_result: None,
             action_receiver: None,
+            refresh_receiver: None,
             status_message: None,
             live_tail: false,
             last_refreshed: None,
@@ -362,14 +372,9 @@ impl App {
         if self.filtered_indices.is_empty() {
             return;
         }
+        let max_index = self.filtered_indices.len() - 1;
         let i = match self.list_state.selected() {
-            Some(i) => {
-                if i >= self.filtered_indices.len() - 1 {
-                    0
-                } else {
-                    i + 1
-                }
-            }
+            Some(i) => i.min(max_index).saturating_add(1).min(max_index),
             None => 0,
         };
         self.list_state.select(Some(i));
@@ -379,14 +384,9 @@ impl App {
         if self.filtered_indices.is_empty() {
             return;
         }
+        let max_index = self.filtered_indices.len() - 1;
         let i = match self.list_state.selected() {
-            Some(i) => {
-                if i == 0 {
-                    self.filtered_indices.len() - 1
-                } else {
-                    i - 1
-                }
-            }
+            Some(i) => i.min(max_index).saturating_sub(1),
             None => 0,
         };
         self.list_state.select(Some(i));
@@ -415,6 +415,7 @@ impl App {
         let current_service = self.selected_unit().map(|s| s.unit.clone());
 
         if current_service != self.last_selected_service || self.log_filters_dirty {
+            self.invalidate_log_entry_heights_cache();
             self.last_selected_service = current_service.clone();
             self.log_filters_dirty = false;
             self.logs_scroll = 0;
@@ -457,20 +458,27 @@ impl App {
         self.log_filters_dirty = true;
     }
 
+    pub fn invalidate_log_entry_heights_cache(&mut self) {
+        self.cached_entry_heights_dirty = true;
+    }
+
     pub fn scroll_logs_up(&mut self, amount: usize) {
+        self.live_tail = false;
         self.logs_scroll = self.logs_scroll.saturating_sub(amount);
     }
 
-    pub fn scroll_logs_down(&mut self, amount: usize, visible_lines: usize) {
+    pub fn scroll_logs_down(&mut self, amount: usize) {
         if !self.logs.is_empty() {
-            let max_scroll = self.logs.len().saturating_sub(visible_lines);
-            self.logs_scroll = (self.logs_scroll + amount).min(max_scroll);
+            let max_scroll = self.logs.len().saturating_sub(1);
+            self.logs_scroll = self.logs_scroll.saturating_add(amount).min(max_scroll);
         }
     }
 
     pub fn toggle_logs(&mut self) {
         self.show_logs = !self.show_logs;
-        if !self.show_logs {
+        if self.show_logs {
+            self.live_tail = true;
+        } else {
             self.live_tail = false;
             self.last_selected_service = None;
         }
@@ -499,6 +507,7 @@ impl App {
             && !new_entries.is_empty()
         {
             self.logs.extend(new_entries);
+            self.invalidate_log_entry_heights_cache();
             self.logs_scroll = usize::MAX;
         }
     }
@@ -527,6 +536,7 @@ impl App {
     }
 
     pub fn update_log_search(&mut self) {
+        self.invalidate_log_entry_heights_cache();
         self.log_search_matches.clear();
         self.log_search_match_index = None;
 
@@ -552,6 +562,7 @@ impl App {
         self.log_search_query.clear();
         self.log_search_matches.clear();
         self.log_search_match_index = None;
+        self.invalidate_log_entry_heights_cache();
     }
 
     pub fn next_log_match(&mut self, visible_lines: usize) {
@@ -590,9 +601,10 @@ impl App {
         self.logs_scroll = 0;
     }
 
-    pub fn logs_go_to_bottom(&mut self, visible_lines: usize) {
+    pub fn logs_go_to_bottom(&mut self) {
         if !self.logs.is_empty() {
-            self.logs_scroll = self.logs.len().saturating_sub(visible_lines);
+            // Sentinel value resolved by UI once panel dimensions are known.
+            self.logs_scroll = usize::MAX;
         }
     }
 
@@ -600,6 +612,7 @@ impl App {
         self.user_mode = !self.user_mode;
         self.last_selected_service = None;
         self.logs.clear();
+        self.invalidate_log_entry_heights_cache();
         self.clear_log_search();
         self.log_priority_filter = None;
         self.log_time_range = TimeRange::All;
@@ -748,12 +761,18 @@ impl App {
         {
             let unit_name = unit_name.clone();
             let user_mode = self.user_mode;
-            let (tx, rx) = mpsc::channel();
+            let unit_type = self.unit_type;
+            let (action_tx, action_rx) = mpsc::channel();
+            let (refresh_tx, refresh_rx) = mpsc::channel();
             self.action_in_progress = true;
-            self.action_receiver = Some(rx);
+            self.action_receiver = Some(action_rx);
+            self.refresh_receiver = Some(refresh_rx);
             std::thread::spawn(move || {
                 let result = execute_unit_action(action, &unit_name, user_mode);
-                let _ = tx.send(result);
+                let _ = action_tx.send(result);
+                if let Ok(units) = fetch_units(unit_type, user_mode) {
+                    let _ = refresh_tx.send(units);
+                }
             });
         }
     }
@@ -765,10 +784,18 @@ impl App {
             self.action_in_progress = false;
             self.action_result = Some(result);
             self.action_receiver = None;
-            self.load_services();
             if self.show_logs {
                 self.mark_logs_dirty();
             }
+        }
+        if let Some(ref rx) = self.refresh_receiver
+            && let Ok(units) = rx.try_recv()
+        {
+            self.refresh_receiver = None;
+            self.properties_cache.clear();
+            self.services = units;
+            self.last_refreshed = Some(chrono::Local::now());
+            self.update_filter();
         }
     }
 
@@ -779,6 +806,7 @@ impl App {
         self.action_in_progress = false;
         self.action_result = None;
         self.action_receiver = None;
+        self.refresh_receiver = None;
     }
 
     pub fn dismiss_action_result(&mut self) {
@@ -788,6 +816,7 @@ impl App {
         self.action_in_progress = false;
         self.action_result = None;
         self.action_receiver = None;
+        self.refresh_receiver = None;
     }
 
     pub fn clear_status_message(&mut self) {
@@ -836,6 +865,10 @@ mod tests {
             search_mode: false,
             filtered_indices: (0..len).collect(),
             logs: Vec::new(),
+            cached_entry_heights: Vec::new(),
+            cached_entry_heights_width: 0,
+            cached_entry_heights_query: String::new(),
+            cached_entry_heights_dirty: true,
             logs_scroll: 0,
             last_selected_service: None,
             status_filter: None,
@@ -876,6 +909,7 @@ mod tests {
             action_in_progress: false,
             action_result: None,
             action_receiver: None,
+            refresh_receiver: None,
             status_message: None,
             live_tail: false,
             last_refreshed: None,
@@ -910,11 +944,11 @@ mod tests {
     }
 
     #[test]
-    fn test_next_wraps_at_end() {
+    fn test_next_clamps_at_end() {
         let mut app = test_app_with_subs(&["running", "exited"]);
         app.list_state.select(Some(1));
         app.next();
-        assert_eq!(app.list_state.selected(), Some(0));
+        assert_eq!(app.list_state.selected(), Some(1));
     }
 
     #[test]
@@ -943,11 +977,11 @@ mod tests {
     }
 
     #[test]
-    fn test_previous_wraps_at_top() {
+    fn test_previous_clamps_at_top() {
         let mut app = test_app_with_subs(&["running", "exited"]);
         app.list_state.select(Some(0));
         app.previous();
-        assert_eq!(app.list_state.selected(), Some(1));
+        assert_eq!(app.list_state.selected(), Some(0));
     }
 
     #[test]
@@ -1563,10 +1597,13 @@ mod tests {
     fn test_toggle_logs() {
         let mut app = test_app_with_subs(&["running"]);
         assert!(!app.show_logs);
+        assert!(!app.live_tail);
         app.toggle_logs();
         assert!(app.show_logs);
+        assert!(app.live_tail);
         app.toggle_logs();
         assert!(!app.show_logs);
+        assert!(!app.live_tail);
     }
 
     #[test]
@@ -1653,6 +1690,14 @@ mod tests {
     }
 
     #[test]
+    fn test_scroll_logs_up_disables_live_tail() {
+        let mut app = test_app_with_subs(&["running"]);
+        app.live_tail = true;
+        app.scroll_logs_up(1);
+        assert!(!app.live_tail);
+    }
+
+    #[test]
     fn test_scroll_logs_down() {
         let mut app = test_app_with_subs(&["running"]);
         app.logs = vec![
@@ -1663,7 +1708,7 @@ mod tests {
             make_log("e"),
         ];
         app.logs_scroll = 0;
-        app.scroll_logs_down(1, 3); // visible_lines = 3
+        app.scroll_logs_down(1);
         assert_eq!(app.logs_scroll, 1);
     }
 
@@ -1672,14 +1717,14 @@ mod tests {
         let mut app = test_app_with_subs(&["running"]);
         app.logs = vec![make_log("a"), make_log("b"), make_log("c")];
         app.logs_scroll = 0;
-        app.scroll_logs_down(100, 2); // max = 3 - 2 = 1
-        assert_eq!(app.logs_scroll, 1);
+        app.scroll_logs_down(100);
+        assert_eq!(app.logs_scroll, 2);
     }
 
     #[test]
     fn test_scroll_logs_down_empty() {
         let mut app = test_app_with_subs(&["running"]);
-        app.scroll_logs_down(1, 10);
+        app.scroll_logs_down(1);
         assert_eq!(app.logs_scroll, 0);
     }
 
@@ -1703,8 +1748,8 @@ mod tests {
             make_log("e"),
         ];
         app.logs_scroll = 0;
-        app.logs_go_to_bottom(3); // visible = 3, max = 5 - 3 = 2
-        assert_eq!(app.logs_scroll, 2);
+        app.logs_go_to_bottom();
+        assert_eq!(app.logs_scroll, usize::MAX);
     }
 
     // Phase 4 — Detail scrolling

@@ -3,7 +3,7 @@ mod service;
 mod ui;
 
 use std::io::{self, stdout};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use crossterm::{
     event::{
@@ -16,6 +16,8 @@ use crossterm::{
 use ratatui::{prelude::*, Terminal};
 
 use app::App;
+
+const LIVE_TAIL_REFRESH_INTERVAL: Duration = Duration::from_millis(500);
 
 fn main() -> io::Result<()> {
     let args: Vec<String> = std::env::args().collect();
@@ -45,24 +47,53 @@ fn main() -> io::Result<()> {
     let mut terminal = Terminal::new(backend)?;
 
     let mut app = App::new();
+    let mut last_live_tail_refresh = Instant::now();
+    let mut last_live_indicator_blink = Instant::now();
+    let mut live_indicator_on = true;
+    let mut was_live_tail_active = false;
 
     loop {
-        terminal.draw(|frame| ui::render(frame, &mut app))?;
-
         app.check_action_progress();
+        let live_tail_active = app.live_tail && app.show_logs;
 
-        let poll_timeout = if app.action_in_progress {
+        if live_tail_active && !was_live_tail_active {
+            live_indicator_on = true;
+            last_live_tail_refresh = Instant::now();
+            last_live_indicator_blink = Instant::now();
+        }
+
+        if live_tail_active {
+            while last_live_indicator_blink.elapsed() >= LIVE_TAIL_REFRESH_INTERVAL {
+                live_indicator_on = !live_indicator_on;
+                last_live_indicator_blink += LIVE_TAIL_REFRESH_INTERVAL;
+            }
+
+            if last_live_tail_refresh.elapsed() >= LIVE_TAIL_REFRESH_INTERVAL {
+                app.refresh_logs();
+                while last_live_tail_refresh.elapsed() >= LIVE_TAIL_REFRESH_INTERVAL {
+                    last_live_tail_refresh += LIVE_TAIL_REFRESH_INTERVAL;
+                }
+            }
+        }
+        was_live_tail_active = live_tail_active;
+
+        terminal.draw(|frame| ui::render(frame, &mut app, live_indicator_on))?;
+
+        let mut poll_timeout = if app.action_in_progress {
             Duration::from_millis(100)
-        } else if app.live_tail && app.show_logs {
-            Duration::from_secs(2)
         } else {
             Duration::from_secs(60)
         };
 
+        if live_tail_active {
+            let refresh_wait =
+                LIVE_TAIL_REFRESH_INTERVAL.saturating_sub(last_live_tail_refresh.elapsed());
+            let blink_wait =
+                LIVE_TAIL_REFRESH_INTERVAL.saturating_sub(last_live_indicator_blink.elapsed());
+            poll_timeout = poll_timeout.min(refresh_wait.min(blink_wait));
+        }
+
         if !event::poll(poll_timeout)? {
-            if app.live_tail && app.show_logs {
-                app.refresh_logs();
-            }
             continue;
         }
 
@@ -242,7 +273,7 @@ fn main() -> io::Result<()> {
                         app.scroll_logs_up(visible_lines);
                     }
                     KeyCode::PageDown => {
-                        app.scroll_logs_down(visible_lines, visible_lines);
+                        app.scroll_logs_down(visible_lines);
                     }
                     KeyCode::Char(c) => {
                         app.log_search_query.push(c);
@@ -257,7 +288,7 @@ fn main() -> io::Result<()> {
                         app.clear_log_search();
                         app.toggle_logs();
                     }
-                    KeyCode::Esc => {
+                    KeyCode::Esc | KeyCode::Char('q') => {
                         if !app.log_search_query.is_empty() {
                             app.clear_log_search();
                         } else {
@@ -275,7 +306,7 @@ fn main() -> io::Result<()> {
                         app.prev_log_match(visible_lines);
                     }
                     KeyCode::Char('j') | KeyCode::Down => {
-                        app.scroll_logs_down(1, visible_lines);
+                        app.scroll_logs_down(1);
                     }
                     KeyCode::Char('k') | KeyCode::Up => {
                         app.scroll_logs_up(1);
@@ -284,19 +315,19 @@ fn main() -> io::Result<()> {
                         app.logs_go_to_top();
                     }
                     KeyCode::Char('G') | KeyCode::End => {
-                        app.logs_go_to_bottom(visible_lines);
+                        app.logs_go_to_bottom();
                     }
                     KeyCode::PageUp => {
                         app.scroll_logs_up(visible_lines);
                     }
                     KeyCode::PageDown => {
-                        app.scroll_logs_down(visible_lines, visible_lines);
+                        app.scroll_logs_down(visible_lines);
                     }
                     KeyCode::Char('u') if key.modifiers.contains(KeyModifiers::CONTROL) => {
                         app.scroll_logs_up(visible_lines / 2);
                     }
                     KeyCode::Char('d') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                        app.scroll_logs_down(visible_lines / 2, visible_lines);
+                        app.scroll_logs_down(visible_lines / 2);
                     }
                     KeyCode::Char('p') => {
                         app.open_priority_picker();
@@ -304,8 +335,14 @@ fn main() -> io::Result<()> {
                     KeyCode::Char('t') => {
                         app.open_time_picker();
                     }
+                    KeyCode::Char('x') => {
+                        app.open_action_picker();
+                    }
                     KeyCode::Char('f') => {
                         app.toggle_live_tail();
+                        if app.live_tail {
+                            app.refresh_logs();
+                        }
                     }
                     _ => {}
                 }
@@ -424,14 +461,13 @@ fn handle_mouse_event(app: &mut App, mouse: MouseEvent, frame_size: Rect) {
 
     if app.show_logs {
         // Log mode: all scroll events go to logs, clicks are ignored
-        if let Some(logs) = regions.logs_panel {
-            let visible = logs.height.saturating_sub(2) as usize;
+        if regions.logs_panel.is_some() {
             match mouse.kind {
                 MouseEventKind::ScrollUp => {
                     app.scroll_logs_up(3);
                 }
                 MouseEventKind::ScrollDown => {
-                    app.scroll_logs_down(3, visible);
+                    app.scroll_logs_down(3);
                 }
                 _ => {}
             }

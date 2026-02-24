@@ -163,7 +163,7 @@ impl UnitAction {
     pub fn shortcut(&self) -> char {
         match self {
             UnitAction::Start => 's',
-            UnitAction::Stop => 'o',
+            UnitAction::Stop => 't',
             UnitAction::Restart => 'r',
             UnitAction::Reload => 'l',
             UnitAction::Enable => 'e',
@@ -766,6 +766,7 @@ pub fn format_cpu_time(nsec: u64) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::collections::HashSet;
 
     fn make_unit(sub: &str) -> SystemdUnit {
         SystemdUnit {
@@ -1168,6 +1169,20 @@ mod tests {
         assert_eq!(entry.boot_id, None);
     }
 
+    #[test]
+    fn test_parse_invocation_id_present() {
+        let line = r#"{"MESSAGE":"hello","_SYSTEMD_INVOCATION_ID":"0123456789abcdef"}"#;
+        let entry = parse_journal_json_line(line);
+        assert_eq!(entry.invocation_id.as_deref(), Some("0123456789abcdef"));
+    }
+
+    #[test]
+    fn test_parse_invocation_id_missing() {
+        let line = r#"{"MESSAGE":"hello"}"#;
+        let entry = parse_journal_json_line(line);
+        assert_eq!(entry.invocation_id, None);
+    }
+
     // Phase 3 — format_log_timestamp
 
     #[test]
@@ -1274,6 +1289,58 @@ mod tests {
     #[test]
     fn test_unit_action_label_daemon_reload() {
         assert_eq!(UnitAction::DaemonReload.label(), "Daemon Reload");
+    }
+
+    // UnitAction — shortcut
+
+    #[test]
+    fn test_unit_action_shortcut_start() {
+        assert_eq!(UnitAction::Start.shortcut(), 's');
+    }
+
+    #[test]
+    fn test_unit_action_shortcut_stop() {
+        assert_eq!(UnitAction::Stop.shortcut(), 't');
+    }
+
+    #[test]
+    fn test_unit_action_shortcut_restart() {
+        assert_eq!(UnitAction::Restart.shortcut(), 'r');
+    }
+
+    #[test]
+    fn test_unit_action_shortcut_reload() {
+        assert_eq!(UnitAction::Reload.shortcut(), 'l');
+    }
+
+    #[test]
+    fn test_unit_action_shortcut_enable() {
+        assert_eq!(UnitAction::Enable.shortcut(), 'e');
+    }
+
+    #[test]
+    fn test_unit_action_shortcut_disable() {
+        assert_eq!(UnitAction::Disable.shortcut(), 'd');
+    }
+
+    #[test]
+    fn test_unit_action_shortcut_daemon_reload() {
+        assert_eq!(UnitAction::DaemonReload.shortcut(), 'D');
+    }
+
+    #[test]
+    fn test_unit_action_shortcuts_unique() {
+        let actions = [
+            UnitAction::Start,
+            UnitAction::Stop,
+            UnitAction::Restart,
+            UnitAction::Reload,
+            UnitAction::Enable,
+            UnitAction::Disable,
+            UnitAction::DaemonReload,
+        ];
+        let shortcuts: HashSet<char> = actions.iter().map(UnitAction::shortcut).collect();
+        assert_eq!(shortcuts.len(), actions.len());
     }
 
     // UnitAction — systemctl_verb

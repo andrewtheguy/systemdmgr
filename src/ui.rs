@@ -5,6 +5,7 @@ use ratatui::{
     widgets::{Block, Borders, Clear, List, ListItem, Paragraph, Wrap},
     Frame,
 };
+use unicode_width::UnicodeWidthStr;
 
 use crate::app::App;
 use crate::service::{
@@ -46,7 +47,7 @@ pub fn get_layout_regions(area: Rect, show_logs: bool) -> LayoutRegions {
     }
 }
 
-pub fn render(frame: &mut Frame, app: &mut App) {
+pub fn render(frame: &mut Frame, app: &mut App, live_indicator_on: bool) {
     // Load logs for selected service if selection changed (only if logs are visible)
     if app.show_logs {
         app.load_logs_for_selected();
@@ -256,19 +257,23 @@ pub fn render(frame: &mut Frame, app: &mut App) {
         if app.log_time_range != TimeRange::All {
             logs_title.push_str(&format!(" [t:{}]", app.log_time_range.label()));
         }
-        if app.live_tail {
-            logs_title.push_str(" [LIVE]");
-        }
 
         let focused_suffix = " [FOCUSED]";
 
         // Calculate visible area (subtract 2 for borders)
         let visible_lines = logs_area.height.saturating_sub(2) as usize;
+        let content_width = logs_area.width.saturating_sub(2) as usize;
 
-        // Clamp scroll so "go to bottom" (usize::MAX sentinel) works without knowing screen height at load time
-        let max_scroll = app.logs.len().saturating_sub(visible_lines);
-        if app.logs_scroll > max_scroll {
-            app.logs_scroll = max_scroll;
+        // Resolve "go to bottom" sentinel against wrapped visual lines.
+        ensure_log_entry_heights_cache(app, content_width);
+        let bottom_scroll = bottom_scroll_index(&app.cached_entry_heights, visible_lines);
+        if app.logs_scroll == usize::MAX {
+            app.logs_scroll = bottom_scroll;
+        } else if app.logs.is_empty() {
+            app.logs_scroll = 0;
+        } else {
+            // Prevent overscrolling into trailing blank space.
+            app.logs_scroll = app.logs_scroll.min(bottom_scroll);
         }
 
         // Track the last seen invocation ID to detect service restarts across None gaps
@@ -288,16 +293,8 @@ pub fn render(frame: &mut Frame, app: &mut App) {
             }
             if entry_idx > 0 {
                 let prev = &app.logs[entry_idx - 1];
-                let content_width = logs_area.width.saturating_sub(2) as usize;
-                let boot_changed = matches!(
-                    (&prev.boot_id, &entry.boot_id),
-                    (Some(a), Some(b)) if a != b
-                );
-                let invocation_changed = !boot_changed
-                    && matches!(
-                        (last_invocation_id, entry.invocation_id.as_deref()),
-                        (Some(a), Some(b)) if a != b
-                    );
+                let (boot_changed, invocation_changed) =
+                    log_boundary_before_entry(prev, entry, last_invocation_id);
 
                 // Boot boundary separator
                 if boot_changed {
@@ -306,8 +303,8 @@ pub fn render(frame: &mut Frame, app: &mut App) {
                         .timestamp
                         .map(|ts| format!(" · {}", format_log_timestamp(ts)))
                         .unwrap_or_default();
-                    let label = format!(" Boot {} {} ", short_id, boot_ts);
-                    let pad_total = content_width.saturating_sub(label.len());
+                    let label = format!(" Boot {}{} ", short_id, boot_ts);
+                    let pad_total = content_width.saturating_sub(label.width());
                     let pad_left = pad_total / 2;
                     let pad_right = pad_total - pad_left;
                     let separator = format!(
@@ -331,8 +328,8 @@ pub fn render(frame: &mut Frame, app: &mut App) {
                         .timestamp
                         .map(|ts| format!(" · {}", format_log_timestamp(ts)))
                         .unwrap_or_default();
-                    let label = format!(" Restarted {} ", restart_ts);
-                    let pad_total = content_width.saturating_sub(label.len());
+                    let label = format!(" Restarted{} ", restart_ts);
+                    let pad_total = content_width.saturating_sub(label.width());
                     let pad_left = pad_total / 2;
                     let pad_right = pad_total - pad_left;
                     let separator = format!(
@@ -368,6 +365,19 @@ pub fn render(frame: &mut Frame, app: &mut App) {
             String::new()
         };
 
+        let mut title_spans = vec![Span::raw(logs_title)];
+        if app.live_tail {
+            let live_style = if live_indicator_on {
+                Style::default().fg(Color::LightGreen)
+            } else {
+                Style::default().fg(Color::DarkGray)
+            };
+            title_spans.push(Span::raw(" "));
+            title_spans.push(Span::styled("[LIVE]", live_style));
+        }
+        title_spans.push(Span::raw(focused_suffix));
+        title_spans.push(Span::raw(scroll_info));
+
         let border_style = Style::default().fg(Color::Yellow);
 
         let logs_paragraph = Paragraph::new(log_lines)
@@ -375,7 +385,7 @@ pub fn render(frame: &mut Frame, app: &mut App) {
             .block(
                 Block::default()
                     .borders(Borders::ALL)
-                    .title(format!("{}{}{}", logs_title, focused_suffix, scroll_info))
+                    .title(Line::from(title_spans))
                     .border_style(border_style),
             )
             .wrap(Wrap { trim: false });
@@ -409,9 +419,9 @@ pub fn render(frame: &mut Frame, app: &mut App) {
     } else if app.log_search_mode {
         "Type to search logs | Esc/Enter: Exit search | ?: Help & more"
     } else if app.show_logs && !app.log_search_query.is_empty() {
-        "Esc: Back | j/k: Scroll | n/N: Next/Prev match | f: Follow | p: Priority | t: Time | /: Search | ?: Help & more"
+        "q/Esc: Back | j/k: Scroll | n/N: Next/Prev match | x: Actions | f: Follow | p: Priority | t: Time | /: Search | ?: Help & more"
     } else if app.show_logs {
-        "Esc: Back | j/k: Scroll | g/G: Top/Bottom | f: Follow | /: Search | p: Priority | t: Time | ?: Help & more"
+        "q/Esc: Back | j/k: Scroll | g/G: Top/Bottom | x: Actions | f: Follow | /: Search | p: Priority | t: Time | ?: Help & more"
     } else if app.search_mode {
         "Type to search | Esc/Enter: Exit search | ?: Help & more"
     } else if !app.search_query.is_empty() || app.status_filter.is_some() || app.file_state_filter.is_some() {
@@ -480,6 +490,82 @@ fn priority_color(p: u8) -> (Color, bool) {
         7 => (Color::DarkGray, false),   // debug
         _ => (Color::White, false),
     }
+}
+
+fn log_boundary_before_entry(
+    prev: &LogEntry,
+    current: &LogEntry,
+    last_invocation_id: Option<&str>,
+) -> (bool, bool) {
+    let boot_changed = matches!(
+        (&prev.boot_id, &current.boot_id),
+        (Some(a), Some(b)) if a != b
+    );
+    let invocation_changed = !boot_changed
+        && matches!(
+            (last_invocation_id, current.invocation_id.as_deref()),
+            (Some(a), Some(b)) if a != b
+        );
+    (boot_changed, invocation_changed)
+}
+
+fn wrapped_line_count(line: &Line<'_>, content_width: usize) -> usize {
+    if content_width == 0 {
+        return 1;
+    }
+    line.width().max(1).div_ceil(content_width)
+}
+
+fn ensure_log_entry_heights_cache(app: &mut App, content_width: usize) {
+    if app.cached_entry_heights_dirty
+        || app.cached_entry_heights_width != content_width
+        || app.cached_entry_heights_query != app.log_search_query
+        || app.cached_entry_heights.len() != app.logs.len()
+    {
+        app.cached_entry_heights = log_entry_visual_heights(app, content_width);
+        app.cached_entry_heights_width = content_width;
+        app.cached_entry_heights_query = app.log_search_query.clone();
+        app.cached_entry_heights_dirty = false;
+    }
+}
+
+fn log_entry_visual_heights(app: &App, content_width: usize) -> Vec<usize> {
+    let mut heights = Vec::with_capacity(app.logs.len());
+    let mut last_invocation_id: Option<&str> = None;
+
+    for (entry_idx, entry) in app.logs.iter().enumerate() {
+        let mut entry_lines = wrapped_line_count(&render_log_entry(entry, entry_idx, app), content_width);
+        if entry_idx > 0 {
+            let prev = &app.logs[entry_idx - 1];
+            let (boot_changed, invocation_changed) =
+                log_boundary_before_entry(prev, entry, last_invocation_id);
+            if boot_changed || invocation_changed {
+                entry_lines += 1;
+            }
+        }
+        if let Some(id) = entry.invocation_id.as_deref() {
+            last_invocation_id = Some(id);
+        }
+        heights.push(entry_lines);
+    }
+
+    heights
+}
+
+fn bottom_scroll_index(entry_heights: &[usize], visible_lines: usize) -> usize {
+    if entry_heights.is_empty() || visible_lines == 0 {
+        return 0;
+    }
+
+    let mut used = 0;
+    for idx in (0..entry_heights.len()).rev() {
+        let entry_lines = entry_heights[idx].max(1);
+        if used + entry_lines > visible_lines {
+            return if used == 0 { idx } else { idx + 1 };
+        }
+        used += entry_lines;
+    }
+    0
 }
 
 fn render_log_entry<'a>(entry: &LogEntry, line_idx: usize, app: &App) -> Line<'a> {
@@ -617,7 +703,7 @@ fn render_help(frame: &mut Frame, app: &App) {
             Line::from("  j / Down      Move down"),
             Line::from("  k / Up        Move up"),
             Line::from("  Enter         Select action"),
-            Line::from("  s/o/r/l/e/d/D Shortcut keys"),
+            Line::from("  s/t/r/l/e/d/D Shortcut keys"),
             Line::from(""),
             Line::from(vec![Span::styled("General", section_style)]),
             Line::from("  Esc / x       Close"),
@@ -659,9 +745,10 @@ fn render_help(frame: &mut Frame, app: &App) {
             Line::from("  t             Time range filter"),
             Line::from(""),
             Line::from(vec![Span::styled("General", section_style)]),
+            Line::from("  x             Action picker"),
             Line::from("  f             Toggle live tail (auto-refresh)"),
             Line::from("  l             Exit logs"),
-            Line::from("  Esc           Clear search / Exit logs"),
+            Line::from("  q / Esc       Clear search / Exit logs"),
             Line::from("  ?             Toggle this help"),
         ]);
     } else {
@@ -1439,6 +1526,19 @@ fn render_dep_lines<'a>(
 mod tests {
     use super::*;
 
+    fn make_log_entry(boot_id: Option<&str>, invocation_id: Option<&str>) -> LogEntry {
+        LogEntry {
+            timestamp: None,
+            priority: None,
+            pid: None,
+            identifier: None,
+            message: "msg".to_string(),
+            boot_id: boot_id.map(str::to_string),
+            invocation_id: invocation_id.map(str::to_string),
+            cursor: None,
+        }
+    }
+
     // Phase 4 — file_state_color
 
     #[test]
@@ -1521,6 +1621,60 @@ mod tests {
     #[test]
     fn test_priority_color_255() {
         assert_eq!(priority_color(255), (Color::White, false));
+    }
+
+    #[test]
+    fn test_log_boundary_before_entry_boot_id_changed() {
+        let prev = make_log_entry(Some("boot-a"), Some("inv-1"));
+        let current = make_log_entry(Some("boot-b"), Some("inv-1"));
+
+        let (boot_changed, invocation_changed) =
+            log_boundary_before_entry(&prev, &current, prev.invocation_id.as_deref());
+
+        assert!(boot_changed);
+        assert!(!invocation_changed);
+    }
+
+    #[test]
+    fn test_log_boundary_before_entry_boot_change_suppresses_invocation_change() {
+        let prev = make_log_entry(Some("boot-a"), Some("inv-1"));
+        let current = make_log_entry(Some("boot-b"), Some("inv-2"));
+
+        let (boot_changed, invocation_changed) =
+            log_boundary_before_entry(&prev, &current, prev.invocation_id.as_deref());
+
+        assert!(boot_changed);
+        assert!(!invocation_changed);
+    }
+
+    #[test]
+    fn test_log_boundary_before_entry_invocation_change_uses_last_invocation_id() {
+        let prev = make_log_entry(Some("boot-a"), None);
+        let current = make_log_entry(Some("boot-a"), Some("inv-2"));
+
+        let (boot_changed, invocation_changed) =
+            log_boundary_before_entry(&prev, &current, Some("inv-1"));
+
+        assert!(!boot_changed);
+        assert!(invocation_changed);
+    }
+
+    #[test]
+    fn test_bottom_scroll_index_basic_window() {
+        let heights = vec![1, 1, 1, 1, 1];
+        assert_eq!(bottom_scroll_index(&heights, 3), 2);
+    }
+
+    #[test]
+    fn test_bottom_scroll_index_skips_oversized_prefix() {
+        let heights = vec![3, 1, 1];
+        assert_eq!(bottom_scroll_index(&heights, 2), 1);
+    }
+
+    #[test]
+    fn test_bottom_scroll_index_single_oversized_entry() {
+        let heights = vec![5];
+        assert_eq!(bottom_scroll_index(&heights, 2), 0);
     }
 
     // Layout geometry — centered_fixed_rect
