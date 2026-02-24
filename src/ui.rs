@@ -420,9 +420,9 @@ pub fn render(frame: &mut Frame, app: &mut App, live_indicator_on: bool) {
     } else if app.log_search_mode {
         "Type to search logs | Esc/Enter: Exit search | ?: Help & more"
     } else if app.show_logs && !app.log_search_query.is_empty() {
-        "Esc: Back | j/k: Scroll | n/N: Next/Prev match | x: Actions | f: Follow | p: Priority | t: Time | /: Search | ?: Help & more"
+        "q/Esc: Back | j/k: Scroll | n/N: Next/Prev match | x: Actions | f: Follow | p: Priority | t: Time | /: Search | ?: Help & more"
     } else if app.show_logs {
-        "Esc: Back | j/k: Scroll | g/G: Top/Bottom | x: Actions | f: Follow | /: Search | p: Priority | t: Time | ?: Help & more"
+        "q/Esc: Back | j/k: Scroll | g/G: Top/Bottom | x: Actions | f: Follow | /: Search | p: Priority | t: Time | ?: Help & more"
     } else if app.search_mode {
         "Type to search | Esc/Enter: Exit search | ?: Help & more"
     } else if !app.search_query.is_empty() || app.status_filter.is_some() || app.file_state_filter.is_some() {
@@ -736,7 +736,7 @@ fn render_help(frame: &mut Frame, app: &App) {
             Line::from("  x             Action picker"),
             Line::from("  f             Toggle live tail (auto-refresh)"),
             Line::from("  l             Exit logs"),
-            Line::from("  Esc           Clear search / Exit logs"),
+            Line::from("  q / Esc       Clear search / Exit logs"),
             Line::from("  ?             Toggle this help"),
         ]);
     } else {

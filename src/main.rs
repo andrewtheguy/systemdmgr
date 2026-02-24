@@ -284,7 +284,7 @@ fn main() -> io::Result<()> {
                         app.clear_log_search();
                         app.toggle_logs();
                     }
-                    KeyCode::Esc => {
+                    KeyCode::Esc | KeyCode::Char('q') => {
                         if !app.log_search_query.is_empty() {
                             app.clear_log_search();
                         } else {

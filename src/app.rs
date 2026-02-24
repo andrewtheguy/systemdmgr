@@ -460,6 +460,7 @@ impl App {
     }
 
     pub fn scroll_logs_up(&mut self, amount: usize) {
+        self.live_tail = false;
         self.logs_scroll = self.logs_scroll.saturating_sub(amount);
     }
 
@@ -1673,6 +1674,14 @@ mod tests {
         app.logs_scroll = 0;
         app.scroll_logs_up(5);
         assert_eq!(app.logs_scroll, 0);
+    }
+
+    #[test]
+    fn test_scroll_logs_up_disables_live_tail() {
+        let mut app = test_app_with_subs(&["running"]);
+        app.live_tail = true;
+        app.scroll_logs_up(1);
+        assert!(!app.live_tail);
     }
 
     #[test]
