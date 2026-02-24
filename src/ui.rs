@@ -264,11 +264,17 @@ pub fn render(frame: &mut Frame, app: &mut App) {
 
         // Calculate visible area (subtract 2 for borders)
         let visible_lines = logs_area.height.saturating_sub(2) as usize;
+        let content_width = logs_area.width.saturating_sub(2) as usize;
 
-        // Clamp scroll so "go to bottom" (usize::MAX sentinel) works without knowing screen height at load time
-        let max_scroll = app.logs.len().saturating_sub(visible_lines);
-        if app.logs_scroll > max_scroll {
-            app.logs_scroll = max_scroll;
+        // Resolve "go to bottom" sentinel against wrapped visual lines.
+        let entry_heights = log_entry_visual_heights(app, content_width);
+        let bottom_scroll = bottom_scroll_index(&entry_heights, visible_lines);
+        if app.logs_scroll == usize::MAX {
+            app.logs_scroll = bottom_scroll;
+        } else if app.logs.is_empty() {
+            app.logs_scroll = 0;
+        } else {
+            app.logs_scroll = app.logs_scroll.min(app.logs.len() - 1);
         }
 
         // Track the last seen invocation ID to detect service restarts across None gaps
@@ -288,16 +294,8 @@ pub fn render(frame: &mut Frame, app: &mut App) {
             }
             if entry_idx > 0 {
                 let prev = &app.logs[entry_idx - 1];
-                let content_width = logs_area.width.saturating_sub(2) as usize;
-                let boot_changed = matches!(
-                    (&prev.boot_id, &entry.boot_id),
-                    (Some(a), Some(b)) if a != b
-                );
-                let invocation_changed = !boot_changed
-                    && matches!(
-                        (last_invocation_id, entry.invocation_id.as_deref()),
-                        (Some(a), Some(b)) if a != b
-                    );
+                let (boot_changed, invocation_changed) =
+                    log_boundary_before_entry(prev, entry, last_invocation_id);
 
                 // Boot boundary separator
                 if boot_changed {
@@ -480,6 +478,69 @@ fn priority_color(p: u8) -> (Color, bool) {
         7 => (Color::DarkGray, false),   // debug
         _ => (Color::White, false),
     }
+}
+
+fn log_boundary_before_entry(
+    prev: &LogEntry,
+    current: &LogEntry,
+    last_invocation_id: Option<&str>,
+) -> (bool, bool) {
+    let boot_changed = matches!(
+        (&prev.boot_id, &current.boot_id),
+        (Some(a), Some(b)) if a != b
+    );
+    let invocation_changed = !boot_changed
+        && matches!(
+            (last_invocation_id, current.invocation_id.as_deref()),
+            (Some(a), Some(b)) if a != b
+        );
+    (boot_changed, invocation_changed)
+}
+
+fn wrapped_line_count(line: &Line<'_>, content_width: usize) -> usize {
+    if content_width == 0 {
+        return 1;
+    }
+    line.width().max(1).div_ceil(content_width)
+}
+
+fn log_entry_visual_heights(app: &App, content_width: usize) -> Vec<usize> {
+    let mut heights = Vec::with_capacity(app.logs.len());
+    let mut last_invocation_id: Option<&str> = None;
+
+    for (entry_idx, entry) in app.logs.iter().enumerate() {
+        let mut entry_lines = wrapped_line_count(&render_log_entry(entry, entry_idx, app), content_width);
+        if entry_idx > 0 {
+            let prev = &app.logs[entry_idx - 1];
+            let (boot_changed, invocation_changed) =
+                log_boundary_before_entry(prev, entry, last_invocation_id);
+            if boot_changed || invocation_changed {
+                entry_lines += 1;
+            }
+        }
+        if let Some(id) = entry.invocation_id.as_deref() {
+            last_invocation_id = Some(id);
+        }
+        heights.push(entry_lines);
+    }
+
+    heights
+}
+
+fn bottom_scroll_index(entry_heights: &[usize], visible_lines: usize) -> usize {
+    if entry_heights.is_empty() || visible_lines == 0 {
+        return 0;
+    }
+
+    let mut used = 0;
+    for idx in (0..entry_heights.len()).rev() {
+        let entry_lines = entry_heights[idx].max(1);
+        if used + entry_lines > visible_lines {
+            return if used == 0 { idx } else { idx + 1 };
+        }
+        used += entry_lines;
+    }
+    0
 }
 
 fn render_log_entry<'a>(entry: &LogEntry, line_idx: usize, app: &App) -> Line<'a> {
@@ -1521,6 +1582,24 @@ mod tests {
     #[test]
     fn test_priority_color_255() {
         assert_eq!(priority_color(255), (Color::White, false));
+    }
+
+    #[test]
+    fn test_bottom_scroll_index_basic_window() {
+        let heights = vec![1, 1, 1, 1, 1];
+        assert_eq!(bottom_scroll_index(&heights, 3), 2);
+    }
+
+    #[test]
+    fn test_bottom_scroll_index_skips_oversized_prefix() {
+        let heights = vec![3, 1, 1];
+        assert_eq!(bottom_scroll_index(&heights, 2), 1);
+    }
+
+    #[test]
+    fn test_bottom_scroll_index_single_oversized_entry() {
+        let heights = vec![5];
+        assert_eq!(bottom_scroll_index(&heights, 2), 0);
     }
 
     // Layout geometry — centered_fixed_rect

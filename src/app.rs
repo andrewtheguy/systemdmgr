@@ -463,10 +463,10 @@ impl App {
         self.logs_scroll = self.logs_scroll.saturating_sub(amount);
     }
 
-    pub fn scroll_logs_down(&mut self, amount: usize, visible_lines: usize) {
+    pub fn scroll_logs_down(&mut self, amount: usize, _visible_lines: usize) {
         if !self.logs.is_empty() {
-            let max_scroll = self.logs.len().saturating_sub(visible_lines);
-            self.logs_scroll = (self.logs_scroll + amount).min(max_scroll);
+            let max_scroll = self.logs.len().saturating_sub(1);
+            self.logs_scroll = self.logs_scroll.saturating_add(amount).min(max_scroll);
         }
     }
 
@@ -592,9 +592,10 @@ impl App {
         self.logs_scroll = 0;
     }
 
-    pub fn logs_go_to_bottom(&mut self, visible_lines: usize) {
+    pub fn logs_go_to_bottom(&mut self, _visible_lines: usize) {
         if !self.logs.is_empty() {
-            self.logs_scroll = self.logs.len().saturating_sub(visible_lines);
+            // Sentinel value resolved by UI once panel dimensions are known.
+            self.logs_scroll = usize::MAX;
         }
     }
 
@@ -1689,8 +1690,8 @@ mod tests {
         let mut app = test_app_with_subs(&["running"]);
         app.logs = vec![make_log("a"), make_log("b"), make_log("c")];
         app.logs_scroll = 0;
-        app.scroll_logs_down(100, 2); // max = 3 - 2 = 1
-        assert_eq!(app.logs_scroll, 1);
+        app.scroll_logs_down(100, 2); // max index = 2
+        assert_eq!(app.logs_scroll, 2);
     }
 
     #[test]
@@ -1720,8 +1721,8 @@ mod tests {
             make_log("e"),
         ];
         app.logs_scroll = 0;
-        app.logs_go_to_bottom(3); // visible = 3, max = 5 - 3 = 2
-        assert_eq!(app.logs_scroll, 2);
+        app.logs_go_to_bottom(3);
+        assert_eq!(app.logs_scroll, usize::MAX);
     }
 
     // Phase 4 — Detail scrolling
