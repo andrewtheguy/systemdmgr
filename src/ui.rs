@@ -691,7 +691,7 @@ fn render_help(frame: &mut Frame, app: &App) {
             Line::from("  j / Down      Move down"),
             Line::from("  k / Up        Move up"),
             Line::from("  Enter         Select action"),
-            Line::from("  s/o/r/l/e/d/D Shortcut keys"),
+            Line::from("  s/t/r/l/e/d/D Shortcut keys"),
             Line::from(""),
             Line::from(vec![Span::styled("General", section_style)]),
             Line::from("  Esc / x       Close"),
