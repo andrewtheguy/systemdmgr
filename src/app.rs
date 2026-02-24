@@ -486,6 +486,9 @@ impl App {
 
     pub fn toggle_live_tail(&mut self) {
         self.live_tail = !self.live_tail;
+        if self.live_tail {
+            self.logs_go_to_bottom();
+        }
     }
 
     pub fn refresh_logs(&mut self) {
@@ -1624,6 +1627,18 @@ mod tests {
         assert!(app.live_tail);
         app.toggle_live_tail();
         assert!(!app.live_tail);
+    }
+
+    #[test]
+    fn test_toggle_live_tail_enabling_goes_to_bottom() {
+        let mut app = test_app_with_subs(&["running"]);
+        app.logs = vec![make_log("a"), make_log("b"), make_log("c")];
+        app.logs_scroll = 1;
+
+        app.toggle_live_tail();
+
+        assert!(app.live_tail);
+        assert_eq!(app.logs_scroll, usize::MAX);
     }
 
     #[test]
