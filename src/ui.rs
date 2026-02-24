@@ -2,7 +2,7 @@ use ratatui::{
     layout::{Constraint, Layout, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, Clear, List, ListItem, Paragraph},
+    widgets::{Block, Borders, Clear, List, ListItem, Paragraph, Wrap},
     Frame,
 };
 
@@ -271,6 +271,14 @@ pub fn render(frame: &mut Frame, app: &mut App) {
             app.logs_scroll = max_scroll;
         }
 
+        // Track the last seen invocation ID to detect service restarts across None gaps
+        let mut last_invocation_id: Option<&str> = app
+            .logs
+            .iter()
+            .take(app.logs_scroll)
+            .rev()
+            .find_map(|e| e.invocation_id.as_deref());
+
         // Create log content with scroll, search highlighting, and boot separators
         let mut log_lines: Vec<Line> = Vec::new();
         let mut entries_shown = 0;
@@ -278,37 +286,72 @@ pub fn render(frame: &mut Frame, app: &mut App) {
             if log_lines.len() >= visible_lines {
                 break;
             }
-            // Boot boundary separator
-            if entry_idx > 0
-                && let (Some(prev), Some(cur)) = (
-                    &app.logs[entry_idx - 1].boot_id,
-                    &entry.boot_id,
-                )
-                && prev != cur
-            {
+            if entry_idx > 0 {
+                let prev = &app.logs[entry_idx - 1];
                 let content_width = logs_area.width.saturating_sub(2) as usize;
-                let short_id = &cur[..cur.len().min(12)];
-                let boot_ts = entry
-                    .timestamp
-                    .map(|ts| format!(" · {}", format_log_timestamp(ts)))
-                    .unwrap_or_default();
-                let label = format!(" Boot {} {} ", short_id, boot_ts);
-                let pad_total = content_width.saturating_sub(label.len());
-                let pad_left = pad_total / 2;
-                let pad_right = pad_total - pad_left;
-                let separator = format!(
-                    "{}{}{}",
-                    "─".repeat(pad_left),
-                    label,
-                    "─".repeat(pad_right),
+                let boot_changed = matches!(
+                    (&prev.boot_id, &entry.boot_id),
+                    (Some(a), Some(b)) if a != b
                 );
-                let style = Style::default()
-                    .fg(Color::Yellow)
-                    .add_modifier(Modifier::BOLD);
-                log_lines.push(Line::from(Span::styled(separator, style)));
-                if log_lines.len() >= visible_lines {
-                    break;
+                let invocation_changed = !boot_changed
+                    && matches!(
+                        (last_invocation_id, entry.invocation_id.as_deref()),
+                        (Some(a), Some(b)) if a != b
+                    );
+
+                // Boot boundary separator
+                if boot_changed {
+                    let short_id = entry.boot_id.as_ref().map(|id| &id[..id.len().min(12)]).unwrap_or("?");
+                    let boot_ts = entry
+                        .timestamp
+                        .map(|ts| format!(" · {}", format_log_timestamp(ts)))
+                        .unwrap_or_default();
+                    let label = format!(" Boot {} {} ", short_id, boot_ts);
+                    let pad_total = content_width.saturating_sub(label.len());
+                    let pad_left = pad_total / 2;
+                    let pad_right = pad_total - pad_left;
+                    let separator = format!(
+                        "{}{}{}",
+                        "─".repeat(pad_left),
+                        label,
+                        "─".repeat(pad_right),
+                    );
+                    let style = Style::default()
+                        .fg(Color::Yellow)
+                        .add_modifier(Modifier::BOLD);
+                    log_lines.push(Line::from(Span::styled(separator, style)));
+                    if log_lines.len() >= visible_lines {
+                        break;
+                    }
                 }
+
+                // Service restart boundary separator
+                if invocation_changed {
+                    let restart_ts = entry
+                        .timestamp
+                        .map(|ts| format!(" · {}", format_log_timestamp(ts)))
+                        .unwrap_or_default();
+                    let label = format!(" Restarted {} ", restart_ts);
+                    let pad_total = content_width.saturating_sub(label.len());
+                    let pad_left = pad_total / 2;
+                    let pad_right = pad_total - pad_left;
+                    let separator = format!(
+                        "{}{}{}",
+                        "─".repeat(pad_left),
+                        label,
+                        "─".repeat(pad_right),
+                    );
+                    let style = Style::default()
+                        .fg(Color::Cyan)
+                        .add_modifier(Modifier::BOLD);
+                    log_lines.push(Line::from(Span::styled(separator, style)));
+                    if log_lines.len() >= visible_lines {
+                        break;
+                    }
+                }
+            }
+            if let Some(id) = entry.invocation_id.as_deref() {
+                last_invocation_id = Some(id);
             }
             log_lines.push(render_log_entry(entry, entry_idx, app));
             entries_shown += 1;
@@ -335,7 +378,7 @@ pub fn render(frame: &mut Frame, app: &mut App) {
                     .title(format!("{}{}{}", logs_title, focused_suffix, scroll_info))
                     .border_style(border_style),
             )
-;
+            .wrap(Wrap { trim: false });
 
         frame.render_widget(logs_paragraph, logs_area);
     }
@@ -350,7 +393,7 @@ pub fn render(frame: &mut Frame, app: &mut App) {
     } else if app.show_confirm {
         "Y: Confirm | N/Esc: Cancel"
     } else if app.show_action_picker {
-        "j/k: Navigate | Enter: Select | Esc/x: Close"
+        "j/k: Navigate | Enter/shortcut: Select | Esc/x: Close"
     } else if app.show_details {
         "j/k: Scroll | g/G: Top/Bottom | PgUp/PgDn: Page | Esc/i: Close"
     } else if app.show_status_picker {
@@ -574,6 +617,7 @@ fn render_help(frame: &mut Frame, app: &App) {
             Line::from("  j / Down      Move down"),
             Line::from("  k / Up        Move up"),
             Line::from("  Enter         Select action"),
+            Line::from("  s/o/r/l/e/d/D Shortcut keys"),
             Line::from(""),
             Line::from(vec![Span::styled("General", section_style)]),
             Line::from("  Esc / x       Close"),
@@ -964,8 +1008,18 @@ fn render_action_picker(frame: &mut Frame, app: &mut App) {
         .available_actions
         .iter()
         .map(|action| {
-            let text = format!("  {}", action.label());
-            ListItem::new(text).style(Style::default().fg(action_color(action)))
+            let color = action_color(action);
+            let shortcut = action.shortcut();
+            let label = action.label();
+            let line = Line::from(vec![
+                Span::styled("  [", Style::default().fg(color)),
+                Span::styled(
+                    shortcut.to_string(),
+                    Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD),
+                ),
+                Span::styled(format!("] {}", label), Style::default().fg(color)),
+            ]);
+            ListItem::new(line)
         })
         .collect();
 

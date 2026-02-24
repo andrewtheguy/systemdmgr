@@ -151,6 +151,12 @@ fn main() -> io::Result<()> {
                     KeyCode::Down | KeyCode::Char('j') => app.action_picker_next(),
                     KeyCode::Up | KeyCode::Char('k') => app.action_picker_previous(),
                     KeyCode::Enter => app.action_picker_confirm(),
+                    KeyCode::Char(c) => {
+                        if let Some(idx) = app.available_actions.iter().position(|a| a.shortcut() == c) {
+                            app.action_picker_state.select(Some(idx));
+                            app.action_picker_confirm();
+                        }
+                    }
                     _ => {}
                 }
                 continue;

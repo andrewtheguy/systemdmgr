@@ -442,6 +442,7 @@ impl App {
                             identifier: None,
                             message: format!("Error fetching logs: {}", e),
                             boot_id: None,
+                            invocation_id: None,
                             cursor: None,
                         }];
                     }
@@ -471,6 +472,7 @@ impl App {
         self.show_logs = !self.show_logs;
         if !self.show_logs {
             self.live_tail = false;
+            self.last_selected_service = None;
         }
     }
 
@@ -818,6 +820,7 @@ mod tests {
             identifier: None,
             message: message.into(),
             boot_id: None,
+            invocation_id: None,
             cursor: None,
         }
     }

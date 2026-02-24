@@ -65,6 +65,7 @@ pub struct LogEntry {
     pub identifier: Option<String>,
     pub message: String,
     pub boot_id: Option<String>,
+    pub invocation_id: Option<String>,
     pub cursor: Option<String>,
 }
 
@@ -156,6 +157,18 @@ impl UnitAction {
             UnitAction::Enable => "Enable",
             UnitAction::Disable => "Disable",
             UnitAction::DaemonReload => "Daemon Reload",
+        }
+    }
+
+    pub fn shortcut(&self) -> char {
+        match self {
+            UnitAction::Start => 's',
+            UnitAction::Stop => 'o',
+            UnitAction::Restart => 'r',
+            UnitAction::Reload => 'l',
+            UnitAction::Enable => 'e',
+            UnitAction::Disable => 'd',
+            UnitAction::DaemonReload => 'D',
         }
     }
 
@@ -387,6 +400,7 @@ fn parse_journal_json_line(line: &str) -> LogEntry {
             identifier: None,
             message: line.to_string(),
             boot_id: None,
+            invocation_id: None,
             cursor: None,
         };
     };
@@ -417,6 +431,8 @@ fn parse_journal_json_line(line: &str) -> LogEntry {
 
     let boot_id = val["_BOOT_ID"].as_str().map(|s| s.to_string());
 
+    let invocation_id = val["_SYSTEMD_INVOCATION_ID"].as_str().map(|s| s.to_string());
+
     let cursor = val["__CURSOR"].as_str().map(|s| s.to_string());
 
     LogEntry {
@@ -426,6 +442,7 @@ fn parse_journal_json_line(line: &str) -> LogEntry {
         identifier,
         message,
         boot_id,
+        invocation_id,
         cursor,
     }
 }
