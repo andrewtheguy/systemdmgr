@@ -303,7 +303,7 @@ pub fn render(frame: &mut Frame, app: &mut App, live_indicator_on: bool) {
                         .timestamp
                         .map(|ts| format!(" · {}", format_log_timestamp(ts)))
                         .unwrap_or_default();
-                    let label = format!(" Boot {} {} ", short_id, boot_ts);
+                    let label = format!(" Boot {}{} ", short_id, boot_ts);
                     let pad_total = content_width.saturating_sub(label.width());
                     let pad_left = pad_total / 2;
                     let pad_right = pad_total - pad_left;
@@ -328,7 +328,7 @@ pub fn render(frame: &mut Frame, app: &mut App, live_indicator_on: bool) {
                         .timestamp
                         .map(|ts| format!(" · {}", format_log_timestamp(ts)))
                         .unwrap_or_default();
-                    let label = format!(" Restarted {} ", restart_ts);
+                    let label = format!(" Restarted{} ", restart_ts);
                     let pad_total = content_width.saturating_sub(label.width());
                     let pad_left = pad_total / 2;
                     let pad_right = pad_total - pad_left;
@@ -1526,6 +1526,19 @@ fn render_dep_lines<'a>(
 mod tests {
     use super::*;
 
+    fn make_log_entry(boot_id: Option<&str>, invocation_id: Option<&str>) -> LogEntry {
+        LogEntry {
+            timestamp: None,
+            priority: None,
+            pid: None,
+            identifier: None,
+            message: "msg".to_string(),
+            boot_id: boot_id.map(str::to_string),
+            invocation_id: invocation_id.map(str::to_string),
+            cursor: None,
+        }
+    }
+
     // Phase 4 — file_state_color
 
     #[test]
@@ -1608,6 +1621,42 @@ mod tests {
     #[test]
     fn test_priority_color_255() {
         assert_eq!(priority_color(255), (Color::White, false));
+    }
+
+    #[test]
+    fn test_log_boundary_before_entry_boot_id_changed() {
+        let prev = make_log_entry(Some("boot-a"), Some("inv-1"));
+        let current = make_log_entry(Some("boot-b"), Some("inv-1"));
+
+        let (boot_changed, invocation_changed) =
+            log_boundary_before_entry(&prev, &current, prev.invocation_id.as_deref());
+
+        assert!(boot_changed);
+        assert!(!invocation_changed);
+    }
+
+    #[test]
+    fn test_log_boundary_before_entry_boot_change_suppresses_invocation_change() {
+        let prev = make_log_entry(Some("boot-a"), Some("inv-1"));
+        let current = make_log_entry(Some("boot-b"), Some("inv-2"));
+
+        let (boot_changed, invocation_changed) =
+            log_boundary_before_entry(&prev, &current, prev.invocation_id.as_deref());
+
+        assert!(boot_changed);
+        assert!(!invocation_changed);
+    }
+
+    #[test]
+    fn test_log_boundary_before_entry_invocation_change_uses_last_invocation_id() {
+        let prev = make_log_entry(Some("boot-a"), None);
+        let current = make_log_entry(Some("boot-a"), Some("inv-2"));
+
+        let (boot_changed, invocation_changed) =
+            log_boundary_before_entry(&prev, &current, Some("inv-1"));
+
+        assert!(!boot_changed);
+        assert!(invocation_changed);
     }
 
     #[test]
