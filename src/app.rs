@@ -4,9 +4,9 @@ use std::sync::mpsc;
 use ratatui::widgets::ListState;
 
 use crate::service::{
-    execute_unit_action, fetch_log_entries, fetch_log_entries_after_cursor, fetch_unit_properties,
-    fetch_units, LogEntry, SystemdUnit, TimeRange, UnitAction, UnitProperties, UnitType,
-    FILE_STATE_OPTIONS, TIME_RANGES, UNIT_TYPES,
+    execute_unit_action, fetch_log_entries, fetch_log_entries_after_cursor,
+    fetch_unit_file_content, fetch_unit_properties, fetch_units, LogEntry, SystemdUnit, TimeRange,
+    UnitAction, UnitProperties, UnitType, FILE_STATE_OPTIONS, TIME_RANGES, UNIT_TYPES,
 };
 
 pub struct App {
@@ -69,6 +69,15 @@ pub struct App {
     pub status_message: Option<String>,
     pub live_tail: bool,
     pub last_refreshed: Option<chrono::DateTime<chrono::Local>>,
+    // Unit file viewer
+    pub show_unit_file: bool,
+    pub unit_file_content: Vec<String>,
+    pub unit_file_scroll: usize,
+    pub unit_file_unit_name: Option<String>,
+    pub unit_file_search_query: String,
+    pub unit_file_search_mode: bool,
+    pub unit_file_search_matches: Vec<usize>,
+    pub unit_file_search_match_index: Option<usize>,
 }
 
 impl App {
@@ -130,6 +139,14 @@ impl App {
             status_message: None,
             live_tail: false,
             last_refreshed: None,
+            show_unit_file: false,
+            unit_file_content: Vec::new(),
+            unit_file_scroll: 0,
+            unit_file_unit_name: None,
+            unit_file_search_query: String::new(),
+            unit_file_search_mode: false,
+            unit_file_search_matches: Vec::new(),
+            unit_file_search_match_index: None,
         };
         app.load_services();
         app
@@ -825,6 +842,123 @@ impl App {
     pub fn clear_status_message(&mut self) {
         self.status_message = None;
     }
+
+    // Unit file viewer methods
+
+    pub fn open_unit_file(&mut self) {
+        if let Some(unit) = self.selected_unit() {
+            let name = unit.unit.clone();
+            match fetch_unit_file_content(&name, self.user_mode) {
+                Ok(lines) => {
+                    self.unit_file_content = lines;
+                }
+                Err(e) => {
+                    self.unit_file_content = vec![format!("Error: {}", e)];
+                }
+            }
+            self.unit_file_unit_name = Some(name);
+            self.unit_file_scroll = 0;
+            self.unit_file_search_query.clear();
+            self.unit_file_search_matches.clear();
+            self.unit_file_search_match_index = None;
+            self.unit_file_search_mode = false;
+            self.show_unit_file = true;
+        }
+    }
+
+    pub fn close_unit_file(&mut self) {
+        self.show_unit_file = false;
+        self.unit_file_content.clear();
+        self.unit_file_scroll = 0;
+        self.unit_file_unit_name = None;
+        self.unit_file_search_query.clear();
+        self.unit_file_search_matches.clear();
+        self.unit_file_search_match_index = None;
+        self.unit_file_search_mode = false;
+    }
+
+    pub fn scroll_unit_file_up(&mut self, amount: usize) {
+        self.unit_file_scroll = self.unit_file_scroll.saturating_sub(amount);
+    }
+
+    pub fn scroll_unit_file_down(&mut self, amount: usize) {
+        if !self.unit_file_content.is_empty() {
+            let max_scroll = self.unit_file_content.len().saturating_sub(1);
+            self.unit_file_scroll = self.unit_file_scroll.saturating_add(amount).min(max_scroll);
+        }
+    }
+
+    pub fn unit_file_go_to_top(&mut self) {
+        self.unit_file_scroll = 0;
+    }
+
+    pub fn unit_file_go_to_bottom(&mut self) {
+        if !self.unit_file_content.is_empty() {
+            self.unit_file_scroll = self.unit_file_content.len().saturating_sub(1);
+        }
+    }
+
+    pub fn update_unit_file_search(&mut self) {
+        self.unit_file_search_matches.clear();
+        self.unit_file_search_match_index = None;
+
+        if self.unit_file_search_query.is_empty() {
+            return;
+        }
+
+        let query = self.unit_file_search_query.to_lowercase();
+        for (i, line) in self.unit_file_content.iter().enumerate() {
+            if line.to_lowercase().contains(&query) {
+                self.unit_file_search_matches.push(i);
+            }
+        }
+
+        if !self.unit_file_search_matches.is_empty() {
+            self.unit_file_search_match_index = Some(0);
+            self.unit_file_scroll = self.unit_file_search_matches[0];
+        }
+    }
+
+    pub fn clear_unit_file_search(&mut self) {
+        self.unit_file_search_query.clear();
+        self.unit_file_search_matches.clear();
+        self.unit_file_search_match_index = None;
+    }
+
+    pub fn next_unit_file_match(&mut self, visible_lines: usize) {
+        if self.unit_file_search_matches.is_empty() {
+            return;
+        }
+        let next = match self.unit_file_search_match_index {
+            Some(i) => (i + 1) % self.unit_file_search_matches.len(),
+            None => 0,
+        };
+        self.unit_file_search_match_index = Some(next);
+        let line_idx = self.unit_file_search_matches[next];
+        if line_idx < self.unit_file_scroll
+            || line_idx >= self.unit_file_scroll + visible_lines
+        {
+            self.unit_file_scroll = line_idx;
+        }
+    }
+
+    pub fn prev_unit_file_match(&mut self, visible_lines: usize) {
+        if self.unit_file_search_matches.is_empty() {
+            return;
+        }
+        let prev = match self.unit_file_search_match_index {
+            Some(0) => self.unit_file_search_matches.len() - 1,
+            Some(i) => i - 1,
+            None => self.unit_file_search_matches.len() - 1,
+        };
+        self.unit_file_search_match_index = Some(prev);
+        let line_idx = self.unit_file_search_matches[prev];
+        if line_idx < self.unit_file_scroll
+            || line_idx >= self.unit_file_scroll + visible_lines
+        {
+            self.unit_file_scroll = line_idx;
+        }
+    }
 }
 
 #[cfg(test)]
@@ -916,6 +1050,14 @@ mod tests {
             status_message: None,
             live_tail: false,
             last_refreshed: None,
+            show_unit_file: false,
+            unit_file_content: Vec::new(),
+            unit_file_scroll: 0,
+            unit_file_unit_name: None,
+            unit_file_search_query: String::new(),
+            unit_file_search_mode: false,
+            unit_file_search_matches: Vec::new(),
+            unit_file_search_match_index: None,
         };
         if !app.filtered_indices.is_empty() {
             app.list_state.select(Some(0));
@@ -2132,5 +2274,168 @@ mod tests {
         app.status_message = Some("Success".into());
         app.clear_status_message();
         assert!(app.status_message.is_none());
+    }
+
+    // Unit file viewer
+
+    #[test]
+    fn test_close_unit_file_resets_state() {
+        let mut app = test_app_with_subs(&["running"]);
+        app.show_unit_file = true;
+        app.unit_file_content = vec!["line1".into(), "line2".into()];
+        app.unit_file_scroll = 5;
+        app.unit_file_unit_name = Some("test.service".into());
+        app.unit_file_search_query = "search".into();
+        app.unit_file_search_matches = vec![0, 1];
+        app.unit_file_search_match_index = Some(0);
+        app.unit_file_search_mode = true;
+
+        app.close_unit_file();
+
+        assert!(!app.show_unit_file);
+        assert!(app.unit_file_content.is_empty());
+        assert_eq!(app.unit_file_scroll, 0);
+        assert!(app.unit_file_unit_name.is_none());
+        assert!(app.unit_file_search_query.is_empty());
+        assert!(app.unit_file_search_matches.is_empty());
+        assert_eq!(app.unit_file_search_match_index, None);
+        assert!(!app.unit_file_search_mode);
+    }
+
+    #[test]
+    fn test_scroll_unit_file_up() {
+        let mut app = test_app_with_subs(&["running"]);
+        app.unit_file_content = vec!["a".into(), "b".into(), "c".into()];
+        app.unit_file_scroll = 2;
+        app.scroll_unit_file_up(1);
+        assert_eq!(app.unit_file_scroll, 1);
+    }
+
+    #[test]
+    fn test_scroll_unit_file_up_clamps_at_zero() {
+        let mut app = test_app_with_subs(&["running"]);
+        app.unit_file_content = vec!["a".into()];
+        app.unit_file_scroll = 0;
+        app.scroll_unit_file_up(5);
+        assert_eq!(app.unit_file_scroll, 0);
+    }
+
+    #[test]
+    fn test_scroll_unit_file_down() {
+        let mut app = test_app_with_subs(&["running"]);
+        app.unit_file_content = vec!["a".into(), "b".into(), "c".into(), "d".into(), "e".into()];
+        app.unit_file_scroll = 0;
+        app.scroll_unit_file_down(1);
+        assert_eq!(app.unit_file_scroll, 1);
+    }
+
+    #[test]
+    fn test_scroll_unit_file_down_clamps_at_max() {
+        let mut app = test_app_with_subs(&["running"]);
+        app.unit_file_content = vec!["a".into(), "b".into(), "c".into()];
+        app.unit_file_scroll = 0;
+        app.scroll_unit_file_down(100);
+        assert_eq!(app.unit_file_scroll, 2);
+    }
+
+    #[test]
+    fn test_unit_file_go_to_top() {
+        let mut app = test_app_with_subs(&["running"]);
+        app.unit_file_content = vec!["a".into(), "b".into()];
+        app.unit_file_scroll = 5;
+        app.unit_file_go_to_top();
+        assert_eq!(app.unit_file_scroll, 0);
+    }
+
+    #[test]
+    fn test_unit_file_go_to_bottom() {
+        let mut app = test_app_with_subs(&["running"]);
+        app.unit_file_content = vec!["a".into(), "b".into(), "c".into(), "d".into(), "e".into()];
+        app.unit_file_scroll = 0;
+        app.unit_file_go_to_bottom();
+        assert_eq!(app.unit_file_scroll, 4);
+    }
+
+    #[test]
+    fn test_update_unit_file_search_finds_matches() {
+        let mut app = test_app_with_subs(&["running"]);
+        app.unit_file_content = vec![
+            "ExecStart=/usr/bin/foo".into(),
+            "Restart=always".into(),
+            "ExecStop=/usr/bin/bar".into(),
+        ];
+        app.unit_file_search_query = "Exec".into();
+        app.update_unit_file_search();
+        assert_eq!(app.unit_file_search_matches, vec![0, 2]);
+        assert_eq!(app.unit_file_search_match_index, Some(0));
+        assert_eq!(app.unit_file_scroll, 0);
+    }
+
+    #[test]
+    fn test_update_unit_file_search_no_matches() {
+        let mut app = test_app_with_subs(&["running"]);
+        app.unit_file_content = vec!["ExecStart=/usr/bin/foo".into()];
+        app.unit_file_search_query = "xyz".into();
+        app.update_unit_file_search();
+        assert!(app.unit_file_search_matches.is_empty());
+        assert_eq!(app.unit_file_search_match_index, None);
+    }
+
+    #[test]
+    fn test_clear_unit_file_search() {
+        let mut app = test_app_with_subs(&["running"]);
+        app.unit_file_search_query = "test".into();
+        app.unit_file_search_matches = vec![0, 1];
+        app.unit_file_search_match_index = Some(0);
+
+        app.clear_unit_file_search();
+
+        assert!(app.unit_file_search_query.is_empty());
+        assert!(app.unit_file_search_matches.is_empty());
+        assert_eq!(app.unit_file_search_match_index, None);
+    }
+
+    #[test]
+    fn test_next_unit_file_match() {
+        let mut app = test_app_with_subs(&["running"]);
+        app.unit_file_content = vec!["match1".into(), "no".into(), "match2".into()];
+        app.unit_file_search_query = "match".into();
+        app.update_unit_file_search();
+        assert_eq!(app.unit_file_search_match_index, Some(0));
+        app.next_unit_file_match(10);
+        assert_eq!(app.unit_file_search_match_index, Some(1));
+    }
+
+    #[test]
+    fn test_next_unit_file_match_wraps() {
+        let mut app = test_app_with_subs(&["running"]);
+        app.unit_file_content = vec!["match1".into(), "match2".into()];
+        app.unit_file_search_query = "match".into();
+        app.update_unit_file_search();
+        app.unit_file_search_match_index = Some(1);
+        app.next_unit_file_match(10);
+        assert_eq!(app.unit_file_search_match_index, Some(0));
+    }
+
+    #[test]
+    fn test_prev_unit_file_match() {
+        let mut app = test_app_with_subs(&["running"]);
+        app.unit_file_content = vec!["match1".into(), "no".into(), "match2".into()];
+        app.unit_file_search_query = "match".into();
+        app.update_unit_file_search();
+        app.unit_file_search_match_index = Some(1);
+        app.prev_unit_file_match(10);
+        assert_eq!(app.unit_file_search_match_index, Some(0));
+    }
+
+    #[test]
+    fn test_prev_unit_file_match_wraps() {
+        let mut app = test_app_with_subs(&["running"]);
+        app.unit_file_content = vec!["match1".into(), "match2".into()];
+        app.unit_file_search_query = "match".into();
+        app.update_unit_file_search();
+        app.unit_file_search_match_index = Some(0);
+        app.prev_unit_file_match(10);
+        assert_eq!(app.unit_file_search_match_index, Some(1));
     }
 }

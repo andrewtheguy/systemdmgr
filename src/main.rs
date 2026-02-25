@@ -229,6 +229,7 @@ fn main() -> io::Result<()> {
 
             // Calculate visible lines for scrolling
             let visible_lines = ui::get_logs_visible_lines(&terminal.get_frame(), app.show_logs);
+            let visible_unit_file_lines = ui::get_unit_file_visible_lines(&terminal.get_frame(), app.show_unit_file);
             let visible_services = ui::get_services_visible_lines(&terminal.get_frame(), app.show_logs);
 
             if app.search_mode {
@@ -256,6 +257,67 @@ fn main() -> io::Result<()> {
                     KeyCode::Char(c) => {
                         app.search_query.push(c);
                         app.update_filter();
+                    }
+                    _ => {}
+                }
+            } else if app.unit_file_search_mode {
+                // Branch 2a: Unit file search typing mode
+                match key.code {
+                    KeyCode::Esc | KeyCode::Enter => {
+                        app.unit_file_search_mode = false;
+                    }
+                    KeyCode::Backspace => {
+                        app.unit_file_search_query.pop();
+                        app.update_unit_file_search();
+                    }
+                    KeyCode::Char(c) => {
+                        app.unit_file_search_query.push(c);
+                        app.update_unit_file_search();
+                    }
+                    _ => {}
+                }
+            } else if app.show_unit_file {
+                // Branch 2b: Unit file normal mode
+                match key.code {
+                    KeyCode::Char('v') | KeyCode::Esc | KeyCode::Char('q') => {
+                        if !app.unit_file_search_query.is_empty() && key.code != KeyCode::Char('v') {
+                            app.clear_unit_file_search();
+                        } else {
+                            app.close_unit_file();
+                        }
+                    }
+                    KeyCode::Char('/') => {
+                        app.unit_file_search_mode = true;
+                    }
+                    KeyCode::Char('n') => {
+                        app.next_unit_file_match(visible_unit_file_lines);
+                    }
+                    KeyCode::Char('N') => {
+                        app.prev_unit_file_match(visible_unit_file_lines);
+                    }
+                    KeyCode::Char('j') | KeyCode::Down => {
+                        app.scroll_unit_file_down(1);
+                    }
+                    KeyCode::Char('k') | KeyCode::Up => {
+                        app.scroll_unit_file_up(1);
+                    }
+                    KeyCode::Char('g') | KeyCode::Home => {
+                        app.unit_file_go_to_top();
+                    }
+                    KeyCode::Char('G') | KeyCode::End => {
+                        app.unit_file_go_to_bottom();
+                    }
+                    KeyCode::PageUp => {
+                        app.scroll_unit_file_up(visible_unit_file_lines);
+                    }
+                    KeyCode::PageDown => {
+                        app.scroll_unit_file_down(visible_unit_file_lines);
+                    }
+                    KeyCode::Char('u') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                        app.scroll_unit_file_up(visible_unit_file_lines / 2);
+                    }
+                    KeyCode::Char('d') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                        app.scroll_unit_file_down(visible_unit_file_lines / 2);
                     }
                     _ => {}
                 }
@@ -405,6 +467,9 @@ fn main() -> io::Result<()> {
                     KeyCode::Char('f') => {
                         app.open_file_state_picker();
                     }
+                    KeyCode::Char('v') => {
+                        app.open_unit_file();
+                    }
                     KeyCode::Char('x') => {
                         app.open_action_picker();
                     }
@@ -453,6 +518,7 @@ fn handle_mouse_event(app: &mut App, mouse: MouseEvent, frame_size: Rect) {
         || app.show_priority_picker || app.show_time_picker
         || app.show_details || app.show_file_state_picker
         || app.show_action_picker || app.show_confirm
+        || app.show_unit_file
     {
         return;
     }
