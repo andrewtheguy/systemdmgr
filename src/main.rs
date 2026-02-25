@@ -270,6 +270,12 @@ fn main() -> io::Result<()> {
                         app.unit_file_search_query.pop();
                         app.update_unit_file_search();
                     }
+                    KeyCode::PageUp => {
+                        app.scroll_unit_file_up(visible_unit_file_lines);
+                    }
+                    KeyCode::PageDown => {
+                        app.scroll_unit_file_down(visible_unit_file_lines);
+                    }
                     KeyCode::Char(c) => {
                         app.unit_file_search_query.push(c);
                         app.update_unit_file_search();

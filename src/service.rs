@@ -739,12 +739,13 @@ pub fn fetch_unit_properties(unit_name: &str, user_mode: bool) -> UnitProperties
 }
 
 pub fn fetch_unit_file_content(unit: &str, user_mode: bool) -> Result<Vec<String>, String> {
-    let mut cmd = Command::new("systemctl");
-    cmd.arg("cat").arg(unit);
+    let mut args = Vec::new();
     if user_mode {
-        cmd.arg("--user");
+        args.push("--user");
     }
-    cmd.arg("--no-pager");
+    args.extend(["cat", unit, "--no-pager"]);
+    let mut cmd = Command::new("systemctl");
+    cmd.args(&args);
 
     let output = cmd.output().map_err(|e| format!("Failed to run systemctl cat: {}", e))?;
 
