@@ -96,10 +96,12 @@ pub fn render(frame: &mut Frame, app: &mut App, live_indicator_on: bool) {
             .style(Style::default().fg(Color::Magenta))
             .block(Block::default().borders(Borders::ALL))
     } else if app.search_mode {
+        let scope_label = if app.user_mode { "User" } else { "System" };
+        let title = format!("{} [{}] Search", app.unit_type.label(), scope_label);
         let search_text = format!("/{}_", app.search_query);
         Paragraph::new(search_text)
             .style(Style::default().fg(Color::Yellow))
-            .block(Block::default().borders(Borders::ALL).title("Search"))
+            .block(Block::default().borders(Borders::ALL).title(title))
     } else if !app.search_query.is_empty() || app.status_filter.is_some() || app.file_state_filter.is_some() {
         let mut info_parts = Vec::new();
         if !app.search_query.is_empty() {
@@ -111,7 +113,9 @@ pub fn render(frame: &mut Frame, app: &mut App, live_indicator_on: bool) {
         if let Some(ref fs) = app.file_state_filter {
             info_parts.push(format!("File state: {}", fs));
         }
-        let info = format!("{} ({} matches)", info_parts.join(" | "), app.filtered_indices.len());
+        let scope_label = if app.user_mode { "User" } else { "System" };
+        let prefix = format!("{} [{}]", app.unit_type.label(), scope_label);
+        let info = format!("{} | {} ({} matches)", prefix, info_parts.join(" | "), app.filtered_indices.len());
         Paragraph::new(info)
             .style(Style::default().fg(Color::Green))
             .block(Block::default().borders(Borders::ALL))
