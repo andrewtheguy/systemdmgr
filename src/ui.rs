@@ -436,11 +436,11 @@ pub fn render(frame: &mut Frame, app: &mut App, live_indicator_on: bool) {
 
         let visible_lines = unit_file_area.height.saturating_sub(2) as usize;
 
-        // Clamp scroll
+        // Clamp scroll — resolve usize::MAX sentinel to position last line at bottom
         if app.unit_file_content.is_empty() {
             app.unit_file_scroll = 0;
         } else {
-            let max_scroll = app.unit_file_content.len().saturating_sub(1);
+            let max_scroll = app.unit_file_content.len().saturating_sub(visible_lines.min(app.unit_file_content.len()));
             app.unit_file_scroll = app.unit_file_scroll.min(max_scroll);
         }
 
@@ -759,28 +759,7 @@ fn highlight_search_in_message<'a>(
         Style::default().bg(Color::DarkGray).fg(Color::Yellow)
     };
 
-    let mut spans = Vec::new();
-    let mut pos = 0;
-    let query_len = app.log_search_query.len();
-
-    while pos < message.len() {
-        if let Some(match_start) = msg_lower[pos..].find(&query_lower) {
-            let abs_start = pos + match_start;
-            if abs_start > pos {
-                spans.push(Span::styled(message[pos..abs_start].to_string(), base_style));
-            }
-            spans.push(Span::styled(
-                message[abs_start..abs_start + query_len].to_string(),
-                highlight_style,
-            ));
-            pos = abs_start + query_len;
-        } else {
-            spans.push(Span::styled(message[pos..].to_string(), base_style));
-            break;
-        }
-    }
-
-    spans
+    find_and_highlight_matches(message, &query_lower, base_style, highlight_style)
 }
 
 fn render_help(frame: &mut Frame, app: &App) {
@@ -1221,31 +1200,83 @@ fn highlight_search_in_span<'a>(
     query: &str,
     base_style: Style,
 ) -> Vec<Span<'a>> {
-    let mut spans = Vec::new();
-    let lower = text.to_lowercase();
     let query_lower = query.to_lowercase();
-    let query_len = query.len();
-    let mut pos = 0;
+    let highlight_style = Style::default().fg(Color::Black).bg(Color::Yellow);
+    let spans = find_and_highlight_matches(text, &query_lower, base_style, highlight_style);
+    if spans.is_empty() {
+        vec![Span::styled(text.to_string(), base_style)]
+    } else {
+        spans
+    }
+}
 
-    while pos < text.len() {
-        if let Some(start) = lower[pos..].find(&query_lower) {
-            let abs_start = pos + start;
-            if abs_start > pos {
-                spans.push(Span::styled(text[pos..abs_start].to_string(), base_style));
+/// Build highlighted spans by finding case-insensitive matches in `text`.
+///
+/// Works by lowercasing char-by-char while tracking the original byte offset
+/// of each char boundary, so that byte positions found in the lowered string
+/// can be mapped back to the correct slice in the original text — even when
+/// `to_lowercase()` changes the byte length of a character.
+fn find_and_highlight_matches<'a>(
+    text: &str,
+    query_lower: &str,
+    base_style: Style,
+    highlight_style: Style,
+) -> Vec<Span<'a>> {
+    if query_lower.is_empty() {
+        return vec![Span::styled(text.to_string(), base_style)];
+    }
+
+    // Build the lowered string and a mapping from lowered byte offset → original byte offset.
+    // `lower_to_orig[i]` gives the original byte offset that corresponds to lowered byte offset `i`.
+    let mut lowered = String::with_capacity(text.len());
+    let mut lower_to_orig: Vec<usize> = Vec::with_capacity(text.len() + 1);
+
+    for (orig_byte, ch) in text.char_indices() {
+        for lc in ch.to_lowercase() {
+            let lc_start = lowered.len();
+            lowered.push(lc);
+            // Map each new byte in the lowered string to this char's original byte offset
+            for _ in lc_start..lowered.len() {
+                lower_to_orig.push(orig_byte);
+            }
+        }
+    }
+    // Sentinel: map the end-of-lowered-string position to end-of-original-string
+    lower_to_orig.push(text.len());
+
+    let mut spans = Vec::new();
+    let mut orig_pos = 0; // current position in the original text (byte offset)
+    let mut lower_pos = 0; // current position in the lowered text (byte offset)
+
+    while lower_pos < lowered.len() {
+        if let Some(match_start_in_slice) = lowered[lower_pos..].find(query_lower) {
+            let lower_match_start = lower_pos + match_start_in_slice;
+            let lower_match_end = lower_match_start + query_lower.len();
+
+            let orig_match_start = lower_to_orig[lower_match_start];
+            let orig_match_end = lower_to_orig[lower_match_end];
+
+            if orig_match_start > orig_pos {
+                spans.push(Span::styled(
+                    text[orig_pos..orig_match_start].to_string(),
+                    base_style,
+                ));
             }
             spans.push(Span::styled(
-                text[abs_start..abs_start + query_len].to_string(),
-                Style::default().fg(Color::Black).bg(Color::Yellow),
+                text[orig_match_start..orig_match_end].to_string(),
+                highlight_style,
             ));
-            pos = abs_start + query_len;
+            orig_pos = orig_match_end;
+            lower_pos = lower_match_end;
         } else {
-            spans.push(Span::styled(text[pos..].to_string(), base_style));
+            spans.push(Span::styled(text[orig_pos..].to_string(), base_style));
+            orig_pos = text.len();
             break;
         }
     }
 
-    if spans.is_empty() {
-        spans.push(Span::styled(text.to_string(), base_style));
+    if orig_pos < text.len() {
+        spans.push(Span::styled(text[orig_pos..].to_string(), base_style));
     }
 
     spans
@@ -2000,5 +2031,70 @@ mod tests {
         // Services list should start after header + column header (y=4)
         assert_eq!(regions.services_list.y, 4);
         assert_eq!(regions.services_list.height, 50 - 3 - 3 - 1);
+    }
+
+    // Tests for find_and_highlight_matches
+
+    fn span_texts(spans: &[Span]) -> Vec<String> {
+        spans.iter().map(|s| s.content.to_string()).collect()
+    }
+
+    #[test]
+    fn test_highlight_ascii_basic() {
+        let base = Style::default();
+        let hl = Style::default().fg(Color::Yellow);
+        let spans = find_and_highlight_matches("hello world", "world", base, hl);
+        assert_eq!(span_texts(&spans), vec!["hello ", "world"]);
+    }
+
+    #[test]
+    fn test_highlight_case_insensitive() {
+        let base = Style::default();
+        let hl = Style::default().fg(Color::Yellow);
+        let spans = find_and_highlight_matches("Hello World", "hello", base, hl);
+        assert_eq!(span_texts(&spans), vec!["Hello", " World"]);
+    }
+
+    #[test]
+    fn test_highlight_multiple_matches() {
+        let base = Style::default();
+        let hl = Style::default().fg(Color::Yellow);
+        let spans = find_and_highlight_matches("abcabc", "abc", base, hl);
+        assert_eq!(span_texts(&spans), vec!["abc", "abc"]);
+    }
+
+    #[test]
+    fn test_highlight_no_match() {
+        let base = Style::default();
+        let hl = Style::default().fg(Color::Yellow);
+        let spans = find_and_highlight_matches("hello", "xyz", base, hl);
+        assert_eq!(span_texts(&spans), vec!["hello"]);
+    }
+
+    #[test]
+    fn test_highlight_empty_query() {
+        let base = Style::default();
+        let hl = Style::default().fg(Color::Yellow);
+        let spans = find_and_highlight_matches("hello", "", base, hl);
+        assert_eq!(span_texts(&spans), vec!["hello"]);
+    }
+
+    #[test]
+    fn test_highlight_multibyte_unicode() {
+        let base = Style::default();
+        let hl = Style::default().fg(Color::Yellow);
+        // Search for "über" in text with ü (2-byte UTF-8)
+        let spans = find_and_highlight_matches("foo über bar", "über", base, hl);
+        assert_eq!(span_texts(&spans), vec!["foo ", "über", " bar"]);
+    }
+
+    #[test]
+    fn test_highlight_case_fold_german_sharp_s() {
+        let base = Style::default();
+        let hl = Style::default().fg(Color::Yellow);
+        // "ß".to_lowercase() == "ß", "SS".to_lowercase() == "ss"
+        // Searching for "ss" should match "SS" in the text
+        let spans = find_and_highlight_matches("groSS", "ss", base, hl);
+        assert_eq!(span_texts(&spans), vec!["gro", "SS"]);
     }
 }

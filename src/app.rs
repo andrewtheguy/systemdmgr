@@ -580,6 +580,7 @@ impl App {
 
     pub fn clear_log_search(&mut self) {
         self.log_search_query.clear();
+        self.log_search_mode = false;
         self.log_search_matches.clear();
         self.log_search_match_index = None;
         self.invalidate_log_entry_heights_cache();
@@ -883,8 +884,7 @@ impl App {
 
     pub fn scroll_unit_file_down(&mut self, amount: usize) {
         if !self.unit_file_content.is_empty() {
-            let max_scroll = self.unit_file_content.len().saturating_sub(1);
-            self.unit_file_scroll = self.unit_file_scroll.saturating_add(amount).min(max_scroll);
+            self.unit_file_scroll = self.unit_file_scroll.saturating_add(amount);
         }
     }
 
@@ -894,7 +894,7 @@ impl App {
 
     pub fn unit_file_go_to_bottom(&mut self) {
         if !self.unit_file_content.is_empty() {
-            self.unit_file_scroll = self.unit_file_content.len().saturating_sub(1);
+            self.unit_file_scroll = usize::MAX;
         }
     }
 
@@ -921,6 +921,7 @@ impl App {
 
     pub fn clear_unit_file_search(&mut self) {
         self.unit_file_search_query.clear();
+        self.unit_file_search_mode = false;
         self.unit_file_search_matches.clear();
         self.unit_file_search_match_index = None;
     }
@@ -2335,7 +2336,8 @@ mod tests {
         app.unit_file_content = vec!["a".into(), "b".into(), "c".into()];
         app.unit_file_scroll = 0;
         app.scroll_unit_file_down(100);
-        assert_eq!(app.unit_file_scroll, 2);
+        // Clamping is deferred to the UI render pass (like logs_scroll)
+        assert_eq!(app.unit_file_scroll, 100);
     }
 
     #[test]
@@ -2353,7 +2355,7 @@ mod tests {
         app.unit_file_content = vec!["a".into(), "b".into(), "c".into(), "d".into(), "e".into()];
         app.unit_file_scroll = 0;
         app.unit_file_go_to_bottom();
-        assert_eq!(app.unit_file_scroll, 4);
+        assert_eq!(app.unit_file_scroll, usize::MAX);
     }
 
     #[test]
