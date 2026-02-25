@@ -1253,7 +1253,7 @@ dependencies = [
 
 [[package]]
 name = "systemdmgr"
-version = "0.0.2-alpha2"
+version = "0.0.1-alpha9"
 dependencies = [
  "chrono",
  "crossterm 0.28.1",
