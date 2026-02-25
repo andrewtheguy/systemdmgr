@@ -476,8 +476,7 @@ pub fn render(frame: &mut Frame, app: &mut App, live_indicator_on: bool) {
                     .borders(Borders::ALL)
                     .title(title)
                     .border_style(border_style),
-            )
-            .wrap(Wrap { trim: false });
+            );
 
         frame.render_widget(paragraph, unit_file_area);
     }
@@ -1072,11 +1071,7 @@ fn centered_rect(percent_x: u16, percent_y: u16, area: Rect) -> Rect {
 }
 
 /// Returns the number of visible lines in the unit file panel
-pub fn get_unit_file_visible_lines(frame: &Frame, show_unit_file: bool) -> usize {
-    if !show_unit_file {
-        return 0;
-    }
-
+fn middle_area_visible_lines(frame: &Frame) -> usize {
     let chunks = Layout::vertical([
         Constraint::Length(3),
         Constraint::Min(1),
@@ -1085,6 +1080,13 @@ pub fn get_unit_file_visible_lines(frame: &Frame, show_unit_file: bool) -> usize
     .split(frame.area());
 
     chunks[1].height.saturating_sub(2) as usize
+}
+
+pub fn get_unit_file_visible_lines(frame: &Frame, show_unit_file: bool) -> usize {
+    if !show_unit_file {
+        return 0;
+    }
+    middle_area_visible_lines(frame)
 }
 
 /// Returns the number of visible lines in the logs panel
@@ -1092,15 +1094,7 @@ pub fn get_logs_visible_lines(frame: &Frame, show_logs: bool) -> usize {
     if !show_logs {
         return 0;
     }
-
-    let chunks = Layout::vertical([
-        Constraint::Length(3),
-        Constraint::Min(1),
-        Constraint::Length(3),
-    ])
-    .split(frame.area());
-
-    chunks[1].height.saturating_sub(2) as usize
+    middle_area_visible_lines(frame)
 }
 
 /// Returns the number of visible lines in the services list
@@ -1108,15 +1102,7 @@ pub fn get_services_visible_lines(frame: &Frame, show_logs: bool) -> usize {
     if show_logs {
         return 0;
     }
-
-    let chunks = Layout::vertical([
-        Constraint::Length(3),
-        Constraint::Min(1),
-        Constraint::Length(3),
-    ])
-    .split(frame.area());
-
-    chunks[1].height.saturating_sub(2) as usize
+    middle_area_visible_lines(frame)
 }
 
 /// Returns the number of visible lines in the details modal
@@ -1134,10 +1120,6 @@ fn highlight_unit_file_line<'a>(line: &'a str, line_idx: usize, app: &App) -> Li
         Style::default().fg(Color::DarkGray)
     } else if trimmed.starts_with('[') && trimmed.ends_with(']') {
         Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)
-    } else if let Some(eq_pos) = trimmed.find('=') {
-        // Key=Value line: we'll handle this with multiple spans below
-        let _ = eq_pos;
-        Style::default()
     } else {
         Style::default().fg(Color::White)
     };

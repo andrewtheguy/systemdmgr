@@ -2440,4 +2440,56 @@ mod tests {
         app.prev_unit_file_match(10);
         assert_eq!(app.unit_file_search_match_index, Some(1));
     }
+
+    #[test]
+    fn test_scroll_unit_file_down_empty() {
+        let mut app = test_app_with_subs(&["running"]);
+        app.scroll_unit_file_down(1);
+        assert_eq!(app.unit_file_scroll, 0);
+    }
+
+    #[test]
+    fn test_next_unit_file_match_from_none() {
+        let mut app = test_app_with_subs(&["running"]);
+        app.unit_file_content = vec!["match1".into(), "no".into(), "match2".into()];
+        app.unit_file_search_query = "match".into();
+        app.update_unit_file_search();
+        app.unit_file_search_match_index = None;
+        app.next_unit_file_match(10);
+        assert_eq!(app.unit_file_search_match_index, Some(0));
+    }
+
+    #[test]
+    fn test_prev_unit_file_match_from_none() {
+        let mut app = test_app_with_subs(&["running"]);
+        app.unit_file_content = vec!["match1".into(), "no".into(), "match2".into()];
+        app.unit_file_search_query = "match".into();
+        app.update_unit_file_search();
+        app.unit_file_search_match_index = None;
+        app.prev_unit_file_match(10);
+        // Should select the last match
+        assert_eq!(app.unit_file_search_match_index, Some(1));
+    }
+
+    #[test]
+    fn test_next_unit_file_match_scrolls_when_out_of_view() {
+        let mut app = test_app_with_subs(&["running"]);
+        app.unit_file_content = (0..20)
+            .map(|i| {
+                if i == 0 || i == 15 {
+                    "match".into()
+                } else {
+                    "no".into()
+                }
+            })
+            .collect();
+        app.unit_file_search_query = "match".into();
+        app.update_unit_file_search();
+        // matches at 0 and 15
+        assert_eq!(app.unit_file_search_matches, vec![0, 15]);
+        app.unit_file_scroll = 0;
+        app.next_unit_file_match(5); // visible = 5, match at 15 is out of view
+        assert_eq!(app.unit_file_search_match_index, Some(1));
+        assert_eq!(app.unit_file_scroll, 15);
+    }
 }
