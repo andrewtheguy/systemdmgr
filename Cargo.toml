@@ -1,6 +1,6 @@
 [package]
 name = "systemdmgr"
-version = "0.0.2-alpha1"
+version = "0.0.1-alpha8"
 edition = "2024"
 
 [dependencies]
