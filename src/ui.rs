@@ -60,15 +60,44 @@ pub fn render(frame: &mut Frame, app: &mut App, live_indicator_on: bool) {
     ])
     .split(frame.area());
 
-    // When logs are shown, give full middle area to logs; hide services list
-    let (services_area, logs_area) = if app.show_logs {
-        (None, Some(chunks[1]))
+    // When logs or unit file are shown, give full middle area to them; hide services list
+    let (services_area, logs_area, unit_file_area) = if app.show_unit_file {
+        (None, None, Some(chunks[1]))
+    } else if app.show_logs {
+        (None, Some(chunks[1]), None)
     } else {
-        (Some(chunks[1]), None)
+        (Some(chunks[1]), None, None)
     };
 
     // Header / Search bar
-    let header = if app.log_search_mode {
+    let header = if app.unit_file_search_mode {
+        let match_info = if app.unit_file_search_matches.is_empty() {
+            if app.unit_file_search_query.is_empty() {
+                String::new()
+            } else {
+                " (no matches)".to_string()
+            }
+        } else {
+            format!(
+                " ({}/{})",
+                app.unit_file_search_match_index.map_or(0, |i| i + 1),
+                app.unit_file_search_matches.len()
+            )
+        };
+        let search_text = format!("/{}_{}",  app.unit_file_search_query, match_info);
+        Paragraph::new(search_text)
+            .style(Style::default().fg(Color::Magenta))
+            .block(Block::default().borders(Borders::ALL).title("Unit File Search"))
+    } else if !app.unit_file_search_query.is_empty() && app.show_unit_file {
+        let match_info = format!(
+            "Unit file search: \"{}\" ({} matches) | n/N: Next/Prev",
+            app.unit_file_search_query,
+            app.unit_file_search_matches.len()
+        );
+        Paragraph::new(match_info)
+            .style(Style::default().fg(Color::Magenta))
+            .block(Block::default().borders(Borders::ALL))
+    } else if app.log_search_mode {
         let match_info = if app.log_search_matches.is_empty() {
             if app.log_search_query.is_empty() {
                 String::new()
@@ -397,6 +426,62 @@ pub fn render(frame: &mut Frame, app: &mut App, live_indicator_on: bool) {
         frame.render_widget(logs_paragraph, logs_area);
     }
 
+    // Unit file panel (only if visible)
+    if let Some(unit_file_area) = unit_file_area {
+        let unit_file_title = if let Some(ref name) = app.unit_file_unit_name {
+            format!("Unit File: {}", name)
+        } else {
+            "Unit File".to_string()
+        };
+
+        let visible_lines = unit_file_area.height.saturating_sub(2) as usize;
+
+        // Clamp scroll — resolve usize::MAX sentinel to position last line at bottom
+        if app.unit_file_content.is_empty() {
+            app.unit_file_scroll = 0;
+        } else {
+            let max_scroll = app.unit_file_content.len().saturating_sub(visible_lines.min(app.unit_file_content.len()));
+            app.unit_file_scroll = app.unit_file_scroll.min(max_scroll);
+        }
+
+        let mut file_lines: Vec<Line> = Vec::new();
+        let mut lines_shown = 0;
+        for (line_idx, line) in app.unit_file_content.iter().enumerate().skip(app.unit_file_scroll) {
+            if file_lines.len() >= visible_lines {
+                break;
+            }
+            file_lines.push(highlight_unit_file_line(line, line_idx, app));
+            lines_shown += 1;
+        }
+
+        let scroll_info = if !app.unit_file_content.is_empty() {
+            format!(
+                " [{}-{}/{}]",
+                app.unit_file_scroll + 1,
+                app.unit_file_scroll + lines_shown,
+                app.unit_file_content.len()
+            )
+        } else {
+            String::new()
+        };
+
+        let title = format!("{}{}", unit_file_title, scroll_info);
+
+        let border_style = Style::default().fg(Color::Yellow);
+
+        let paragraph = Paragraph::new(file_lines)
+            .style(Style::default().fg(Color::White))
+            .block(
+                Block::default()
+                    .borders(Borders::ALL)
+                    .title(title)
+                    .border_style(border_style),
+            )
+            .wrap(Wrap { trim: false });
+
+        frame.render_widget(paragraph, unit_file_area);
+    }
+
     // Footer with keybindings
     let footer_text = if app.show_help {
         "Press any key to close"
@@ -420,6 +505,12 @@ pub fn render(frame: &mut Frame, app: &mut App, live_indicator_on: bool) {
         "j/k: Navigate | Enter: Select | Esc/T: Close"
     } else if app.show_file_state_picker {
         "j/k: Navigate | Enter: Select | Esc/f: Close"
+    } else if app.unit_file_search_mode {
+        "Type to search unit file | Esc/Enter: Exit search | ?: Help & more"
+    } else if app.show_unit_file && !app.unit_file_search_query.is_empty() {
+        "v/Esc: Back | j/k: Scroll | n/N: Next/Prev match | /: Search | ?: Help & more"
+    } else if app.show_unit_file {
+        "v/Esc: Back | j/k: Scroll | g/G: Top/Bottom | /: Search | ?: Help & more"
     } else if app.log_search_mode {
         "Type to search logs | Esc/Enter: Exit search | ?: Help & more"
     } else if app.show_logs && !app.log_search_query.is_empty() {
@@ -668,28 +759,7 @@ fn highlight_search_in_message<'a>(
         Style::default().bg(Color::DarkGray).fg(Color::Yellow)
     };
 
-    let mut spans = Vec::new();
-    let mut pos = 0;
-    let query_len = app.log_search_query.len();
-
-    while pos < message.len() {
-        if let Some(match_start) = msg_lower[pos..].find(&query_lower) {
-            let abs_start = pos + match_start;
-            if abs_start > pos {
-                spans.push(Span::styled(message[pos..abs_start].to_string(), base_style));
-            }
-            spans.push(Span::styled(
-                message[abs_start..abs_start + query_len].to_string(),
-                highlight_style,
-            ));
-            pos = abs_start + query_len;
-        } else {
-            spans.push(Span::styled(message[pos..].to_string(), base_style));
-            break;
-        }
-    }
-
-    spans
+    find_and_highlight_matches(message, &query_lower, base_style, highlight_style)
 }
 
 fn render_help(frame: &mut Frame, app: &App) {
@@ -726,6 +796,26 @@ fn render_help(frame: &mut Frame, app: &App) {
             Line::from(vec![Span::styled("General", section_style)]),
             Line::from("  Esc / i       Close details"),
             Line::from("  Enter         Close details"),
+            Line::from("  ?             Toggle this help"),
+        ]);
+    } else if app.show_unit_file {
+        title = "Help: Unit File";
+        help_text.extend(vec![
+            Line::from(vec![Span::styled("Navigation", section_style)]),
+            Line::from("  j / Down      Scroll down"),
+            Line::from("  k / Up        Scroll up"),
+            Line::from("  g / Home      Go to top"),
+            Line::from("  G / End       Go to bottom"),
+            Line::from("  PgUp / PgDn   Page scroll"),
+            Line::from("  Ctrl+u / d    Half page scroll"),
+            Line::from(""),
+            Line::from(vec![Span::styled("Search", section_style)]),
+            Line::from("  /             Search unit file"),
+            Line::from("  n             Next match"),
+            Line::from("  N             Previous match"),
+            Line::from(""),
+            Line::from(vec![Span::styled("General", section_style)]),
+            Line::from("  v / Esc / q   Close unit file"),
             Line::from("  ?             Toggle this help"),
         ]);
     } else if app.show_logs {
@@ -777,6 +867,7 @@ fn render_help(frame: &mut Frame, app: &App) {
             Line::from("  x             Action picker"),
             Line::from("  R             Daemon reload"),
             Line::from("  l             Open logs"),
+            Line::from("  v             View unit file"),
             Line::from(""),
             Line::from(vec![Span::styled("Mouse", section_style)]),
             Line::from("  Click         Select unit"),
@@ -980,12 +1071,8 @@ fn centered_rect(percent_x: u16, percent_y: u16, area: Rect) -> Rect {
     .split(popup_layout[1])[1]
 }
 
-/// Returns the number of visible lines in the logs panel
-pub fn get_logs_visible_lines(frame: &Frame, show_logs: bool) -> usize {
-    if !show_logs {
-        return 0;
-    }
-
+/// Returns the number of visible lines in the unit file panel
+fn middle_area_visible_lines(frame: &Frame) -> usize {
     let chunks = Layout::vertical([
         Constraint::Length(3),
         Constraint::Min(1),
@@ -994,6 +1081,21 @@ pub fn get_logs_visible_lines(frame: &Frame, show_logs: bool) -> usize {
     .split(frame.area());
 
     chunks[1].height.saturating_sub(2) as usize
+}
+
+pub fn get_unit_file_visible_lines(frame: &Frame, show_unit_file: bool) -> usize {
+    if !show_unit_file {
+        return 0;
+    }
+    middle_area_visible_lines(frame)
+}
+
+/// Returns the number of visible lines in the logs panel
+pub fn get_logs_visible_lines(frame: &Frame, show_logs: bool) -> usize {
+    if !show_logs {
+        return 0;
+    }
+    middle_area_visible_lines(frame)
 }
 
 /// Returns the number of visible lines in the services list
@@ -1001,15 +1103,7 @@ pub fn get_services_visible_lines(frame: &Frame, show_logs: bool) -> usize {
     if show_logs {
         return 0;
     }
-
-    let chunks = Layout::vertical([
-        Constraint::Length(3),
-        Constraint::Min(1),
-        Constraint::Length(3),
-    ])
-    .split(frame.area());
-
-    chunks[1].height.saturating_sub(2) as usize
+    middle_area_visible_lines(frame)
 }
 
 /// Returns the number of visible lines in the details modal
@@ -1017,6 +1111,158 @@ pub fn get_details_visible_lines(frame: &Frame) -> usize {
     let area = centered_rect(70, 80, frame.area());
     // Subtract 2 for borders
     area.height.saturating_sub(2) as usize
+}
+
+fn highlight_unit_file_line<'a>(line: &'a str, line_idx: usize, app: &App) -> Line<'a> {
+    let trimmed = line.trim();
+
+    // Determine base style from INI-like syntax
+    let base_style = if trimmed.starts_with('#') || trimmed.starts_with(';') {
+        Style::default().fg(Color::DarkGray)
+    } else if trimmed.starts_with('[') && trimmed.ends_with(']') {
+        Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)
+    } else {
+        Style::default().fg(Color::White)
+    };
+
+    // Check if this line is a search match
+    let is_match = app
+        .unit_file_search_match_index
+        .and_then(|mi| app.unit_file_search_matches.get(mi))
+        .is_some_and(|&idx| idx == line_idx);
+
+    // For Key=Value lines, render key in cyan and value in white
+    if !(trimmed.starts_with('#')
+        || trimmed.starts_with(';')
+        || trimmed.starts_with('[') && trimmed.ends_with(']'))
+        && let Some(eq_pos) = line.find('=')
+    {
+        let key = &line[..eq_pos + 1];
+        let value = &line[eq_pos + 1..];
+
+        let key_style = if is_match {
+            Style::default().fg(Color::Cyan).bg(Color::DarkGray)
+        } else {
+            Style::default().fg(Color::Cyan)
+        };
+        let val_style = if is_match {
+            Style::default().fg(Color::White).bg(Color::DarkGray)
+        } else {
+            Style::default().fg(Color::White)
+        };
+
+        if !app.unit_file_search_query.is_empty() {
+            let mut spans = Vec::new();
+            spans.extend(highlight_search_in_span(key, &app.unit_file_search_query, key_style));
+            spans.extend(highlight_search_in_span(value, &app.unit_file_search_query, val_style));
+            return Line::from(spans);
+        }
+
+        return Line::from(vec![
+            Span::styled(key.to_string(), key_style),
+            Span::styled(value.to_string(), val_style),
+        ]);
+    }
+
+    let style = if is_match {
+        base_style.bg(Color::DarkGray)
+    } else {
+        base_style
+    };
+
+    if !app.unit_file_search_query.is_empty() {
+        let spans = highlight_search_in_span(line, &app.unit_file_search_query, style);
+        return Line::from(spans);
+    }
+
+    Line::from(Span::styled(line.to_string(), style))
+}
+
+fn highlight_search_in_span<'a>(
+    text: &'a str,
+    query: &str,
+    base_style: Style,
+) -> Vec<Span<'a>> {
+    let query_lower = query.to_lowercase();
+    let highlight_style = Style::default().fg(Color::Black).bg(Color::Yellow);
+    let spans = find_and_highlight_matches(text, &query_lower, base_style, highlight_style);
+    if spans.is_empty() {
+        vec![Span::styled(text.to_string(), base_style)]
+    } else {
+        spans
+    }
+}
+
+/// Build highlighted spans by finding case-insensitive matches in `text`.
+///
+/// Works by lowercasing char-by-char while tracking the original byte offset
+/// of each char boundary, so that byte positions found in the lowered string
+/// can be mapped back to the correct slice in the original text — even when
+/// `to_lowercase()` changes the byte length of a character.
+fn find_and_highlight_matches<'a>(
+    text: &str,
+    query_lower: &str,
+    base_style: Style,
+    highlight_style: Style,
+) -> Vec<Span<'a>> {
+    if query_lower.is_empty() {
+        return vec![Span::styled(text.to_string(), base_style)];
+    }
+
+    // Build the lowered string and a mapping from lowered byte offset → original byte offset.
+    // `lower_to_orig[i]` gives the original byte offset that corresponds to lowered byte offset `i`.
+    let mut lowered = String::with_capacity(text.len());
+    let mut lower_to_orig: Vec<usize> = Vec::with_capacity(text.len() + 1);
+
+    for (orig_byte, ch) in text.char_indices() {
+        for lc in ch.to_lowercase() {
+            let lc_start = lowered.len();
+            lowered.push(lc);
+            // Map each new byte in the lowered string to this char's original byte offset
+            for _ in lc_start..lowered.len() {
+                lower_to_orig.push(orig_byte);
+            }
+        }
+    }
+    // Sentinel: map the end-of-lowered-string position to end-of-original-string
+    lower_to_orig.push(text.len());
+
+    let mut spans = Vec::new();
+    let mut orig_pos = 0; // current position in the original text (byte offset)
+    let mut lower_pos = 0; // current position in the lowered text (byte offset)
+
+    while lower_pos < lowered.len() {
+        if let Some(match_start_in_slice) = lowered[lower_pos..].find(query_lower) {
+            let lower_match_start = lower_pos + match_start_in_slice;
+            let lower_match_end = lower_match_start + query_lower.len();
+
+            let orig_match_start = lower_to_orig[lower_match_start];
+            let orig_match_end = lower_to_orig[lower_match_end];
+
+            if orig_match_start > orig_pos {
+                spans.push(Span::styled(
+                    text[orig_pos..orig_match_start].to_string(),
+                    base_style,
+                ));
+            }
+            spans.push(Span::styled(
+                text[orig_match_start..orig_match_end].to_string(),
+                highlight_style,
+            ));
+            orig_pos = orig_match_end;
+            lower_pos = lower_match_end;
+        } else {
+            spans.push(Span::styled(text[orig_pos..].to_string(), base_style));
+            orig_pos = text.len();
+            break;
+        }
+    }
+
+    if orig_pos < text.len() {
+        spans.push(Span::styled(text[orig_pos..].to_string(), base_style));
+    }
+
+    spans
 }
 
 fn load_color(state: &str) -> Color {
@@ -1768,5 +2014,70 @@ mod tests {
         // Services list should start after header + column header (y=4)
         assert_eq!(regions.services_list.y, 4);
         assert_eq!(regions.services_list.height, 50 - 3 - 3 - 1);
+    }
+
+    // Tests for find_and_highlight_matches
+
+    fn span_texts(spans: &[Span]) -> Vec<String> {
+        spans.iter().map(|s| s.content.to_string()).collect()
+    }
+
+    #[test]
+    fn test_highlight_ascii_basic() {
+        let base = Style::default();
+        let hl = Style::default().fg(Color::Yellow);
+        let spans = find_and_highlight_matches("hello world", "world", base, hl);
+        assert_eq!(span_texts(&spans), vec!["hello ", "world"]);
+    }
+
+    #[test]
+    fn test_highlight_case_insensitive() {
+        let base = Style::default();
+        let hl = Style::default().fg(Color::Yellow);
+        let spans = find_and_highlight_matches("Hello World", "hello", base, hl);
+        assert_eq!(span_texts(&spans), vec!["Hello", " World"]);
+    }
+
+    #[test]
+    fn test_highlight_multiple_matches() {
+        let base = Style::default();
+        let hl = Style::default().fg(Color::Yellow);
+        let spans = find_and_highlight_matches("abcabc", "abc", base, hl);
+        assert_eq!(span_texts(&spans), vec!["abc", "abc"]);
+    }
+
+    #[test]
+    fn test_highlight_no_match() {
+        let base = Style::default();
+        let hl = Style::default().fg(Color::Yellow);
+        let spans = find_and_highlight_matches("hello", "xyz", base, hl);
+        assert_eq!(span_texts(&spans), vec!["hello"]);
+    }
+
+    #[test]
+    fn test_highlight_empty_query() {
+        let base = Style::default();
+        let hl = Style::default().fg(Color::Yellow);
+        let spans = find_and_highlight_matches("hello", "", base, hl);
+        assert_eq!(span_texts(&spans), vec!["hello"]);
+    }
+
+    #[test]
+    fn test_highlight_multibyte_unicode() {
+        let base = Style::default();
+        let hl = Style::default().fg(Color::Yellow);
+        // Search for "über" in text with ü (2-byte UTF-8)
+        let spans = find_and_highlight_matches("foo über bar", "über", base, hl);
+        assert_eq!(span_texts(&spans), vec!["foo ", "über", " bar"]);
+    }
+
+    #[test]
+    fn test_highlight_case_fold_german_sharp_s() {
+        let base = Style::default();
+        let hl = Style::default().fg(Color::Yellow);
+        // "ß".to_lowercase() == "ß", "SS".to_lowercase() == "ss"
+        // Searching for "ss" should match "SS" in the text
+        let spans = find_and_highlight_matches("groSS", "ss", base, hl);
+        assert_eq!(span_texts(&spans), vec!["gro", "SS"]);
     }
 }

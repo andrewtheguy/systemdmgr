@@ -738,6 +738,26 @@ pub fn fetch_unit_properties(unit_name: &str, user_mode: bool) -> UnitProperties
     }
 }
 
+pub fn fetch_unit_file_content(unit: &str, user_mode: bool) -> Result<Vec<String>, String> {
+    let mut args = Vec::new();
+    if user_mode {
+        args.push("--user");
+    }
+    args.extend(["cat", unit, "--no-pager"]);
+    let mut cmd = Command::new("systemctl");
+    cmd.args(&args);
+
+    let output = cmd.output().map_err(|e| format!("Failed to run systemctl cat: {}", e))?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(format!("systemctl cat failed: {}", stderr.trim()));
+    }
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    Ok(stdout.lines().map(|l| l.to_string()).collect())
+}
+
 pub fn format_bytes(bytes: u64) -> String {
     const KB: u64 = 1024;
     const MB: u64 = 1024 * KB;
