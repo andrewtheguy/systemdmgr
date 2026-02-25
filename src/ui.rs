@@ -476,7 +476,8 @@ pub fn render(frame: &mut Frame, app: &mut App, live_indicator_on: bool) {
                     .borders(Borders::ALL)
                     .title(title)
                     .border_style(border_style),
-            );
+            )
+            .wrap(Wrap { trim: false });
 
         frame.render_widget(paragraph, unit_file_area);
     }
