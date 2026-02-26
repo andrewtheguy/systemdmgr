@@ -574,9 +574,15 @@ impl App {
         self.log_paused = !self.log_paused;
         if self.log_paused {
             if !self.logs.is_empty() {
-                // Clamp stale scroll (e.g. usize::MAX sentinel) before computing selection
+                // Resolve a stale logs_scroll (including the usize::MAX "go to bottom"
+                // sentinel) so the walk below starts from a valid index.
                 self.logs_scroll = self.logs_scroll.min(self.logs.len().saturating_sub(1));
-                // Start selection at the last visible entry (bottom of viewport)
+                // Walk entries forward from logs_scroll, accumulating each entry's
+                // visual height (from cached_entry_heights, defaulting to 1). Stop
+                // when the next entry would exceed visible_lines, then select the
+                // last entry that fit — i.e. the bottom-most visible entry. The
+                // `used > 0` guard guarantees at least one entry is always selected,
+                // even if a single entry is taller than the viewport.
                 let mut used = 0;
                 let mut last = self.logs_scroll;
                 for i in self.logs_scroll..self.logs.len() {
@@ -617,14 +623,16 @@ impl App {
             Some(name) => name.clone(),
             None => return,
         };
-        // Find service in filtered list and select it
-        if let Some(pos) = self
+        // Find service in filtered list; bail out if it's excluded by current filters
+        let pos = match self
             .filtered_indices
             .iter()
             .position(|&i| self.services[i].unit == unit_name)
         {
-            self.list_state.select(Some(pos));
-        }
+            Some(pos) => pos,
+            None => return,
+        };
+        self.list_state.select(Some(pos));
         // Switch to per-unit log view
         self.navigated_from_system_logs = true;
         self.system_logs_mode = false;
@@ -2775,6 +2783,31 @@ mod tests {
         app.navigate_to_log_unit();
         // Should be a no-op — still in system logs mode
         assert!(app.system_logs_mode);
+    }
+
+    #[test]
+    fn test_navigate_to_log_unit_filtered_out() {
+        let mut app = test_app_with_subs(&["running", "exited"]);
+        // Filter to only "running" — unit1.service ("exited") is excluded
+        app.status_filter = Some("running".to_string());
+        app.update_filter();
+        assert_eq!(app.filtered_indices.len(), 1);
+
+        app.system_logs_mode = true;
+        app.show_logs = true;
+        app.log_paused = true;
+        app.list_state.select(Some(0));
+
+        let mut log = make_log("test message");
+        log.unit = Some("unit1.service".to_string()); // excluded by filter
+        app.logs = vec![log];
+        app.log_selected_entry = Some(0);
+
+        app.navigate_to_log_unit();
+        // Should be a no-op — unit is filtered out, stay in system logs mode
+        assert!(app.system_logs_mode);
+        assert_eq!(app.list_state.selected(), Some(0));
+        assert_eq!(app.log_selected_entry, Some(0));
     }
 
     #[test]

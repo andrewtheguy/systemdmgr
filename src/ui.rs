@@ -380,7 +380,7 @@ pub fn render(frame: &mut Frame, app: &mut App, live_indicator_on: bool) {
                             new_scroll = i;
                         }
                     }
-                    app.logs_scroll = new_scroll;
+                    app.logs_scroll = new_scroll.min(sel);
                 }
             }
         }
