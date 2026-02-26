@@ -152,6 +152,10 @@ pub fn render(frame: &mut Frame, app: &mut App, live_indicator_on: bool) {
         Paragraph::new(msg.as_str())
             .style(Style::default().fg(Color::Green).add_modifier(Modifier::BOLD))
             .block(Block::default().borders(Borders::ALL))
+    } else if app.system_logs_mode {
+        Paragraph::new("SystemD Logs")
+            .style(Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD))
+            .block(Block::default().borders(Borders::ALL))
     } else {
         let scope_label = if app.user_mode { "User" } else { "System" };
         let title = format!("SystemD {} [{}]", app.unit_type.label(), scope_label);
