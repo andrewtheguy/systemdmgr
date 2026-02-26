@@ -67,6 +67,7 @@ pub struct App {
     pub action_receiver: Option<mpsc::Receiver<Result<String, String>>>,
     pub refresh_receiver: Option<mpsc::Receiver<Vec<SystemdUnit>>>,
     pub status_message: Option<String>,
+    pub system_logs_mode: bool,
     pub log_paused: bool,
     pub logs_at_bottom: bool,
     pub last_refreshed: Option<chrono::DateTime<chrono::Local>>,
@@ -138,6 +139,7 @@ impl App {
             action_receiver: None,
             refresh_receiver: None,
             status_message: None,
+            system_logs_mode: false,
             log_paused: false,
             logs_at_bottom: true,
             last_refreshed: None,
@@ -298,6 +300,7 @@ impl App {
             let new_type = UNIT_TYPES[i];
             if new_type != self.unit_type {
                 self.unit_type = new_type;
+                self.system_logs_mode = false;
                 self.status_filter = None;
                 self.file_state_filter = None;
                 self.search_query.clear();
@@ -431,6 +434,43 @@ impl App {
     }
 
     pub fn load_logs_for_selected(&mut self) {
+        if self.system_logs_mode {
+            if !self.log_filters_dirty && !self.logs.is_empty() {
+                return;
+            }
+            self.invalidate_log_entry_heights_cache();
+            self.log_filters_dirty = false;
+            self.logs_scroll = 0;
+            self.clear_log_search();
+            match fetch_log_entries(
+                None,
+                1000,
+                self.user_mode,
+                self.log_priority_filter,
+                self.log_time_range,
+            ) {
+                Ok(logs) => {
+                    self.logs = logs;
+                    if !self.logs.is_empty() {
+                        self.logs_scroll = usize::MAX;
+                    }
+                }
+                Err(e) => {
+                    self.logs = vec![LogEntry {
+                        timestamp: None,
+                        priority: None,
+                        pid: None,
+                        identifier: None,
+                        message: format!("Error fetching logs: {}", e),
+                        boot_id: None,
+                        invocation_id: None,
+                        cursor: None,
+                    }];
+                }
+            }
+            return;
+        }
+
         let current_service = self.selected_unit().map(|s| s.unit.clone());
 
         if current_service != self.last_selected_service || self.log_filters_dirty {
@@ -442,7 +482,7 @@ impl App {
 
             if let Some(unit) = current_service {
                 match fetch_log_entries(
-                    &unit,
+                    Some(&unit),
                     1000,
                     self.user_mode,
                     self.log_priority_filter,
@@ -495,8 +535,26 @@ impl App {
     pub fn toggle_logs(&mut self) {
         self.show_logs = !self.show_logs;
         self.log_paused = false;
+        self.system_logs_mode = false;
         if !self.show_logs {
             self.last_selected_service = None;
+        }
+    }
+
+    pub fn toggle_system_logs(&mut self) {
+        if self.system_logs_mode && self.show_logs {
+            self.system_logs_mode = false;
+            self.show_logs = false;
+            self.log_paused = false;
+            self.last_selected_service = None;
+        } else {
+            self.system_logs_mode = true;
+            self.show_logs = true;
+            self.log_paused = false;
+            self.logs.clear();
+            self.invalidate_log_entry_heights_cache();
+            self.clear_log_search();
+            self.log_filters_dirty = true;
         }
     }
 
@@ -508,16 +566,20 @@ impl App {
     }
 
     pub fn refresh_logs(&mut self) {
-        let unit = match self.last_selected_service.as_ref() {
-            Some(u) => u.clone(),
-            None => return,
+        let unit_name = if self.system_logs_mode {
+            None
+        } else {
+            match self.last_selected_service.as_ref() {
+                Some(u) => Some(u.clone()),
+                None => return,
+            }
         };
         let cursor = match self.logs.last().and_then(|e| e.cursor.as_ref()) {
             Some(c) => c.clone(),
             None => return,
         };
         if let Ok(new_entries) = fetch_log_entries_after_cursor(
-            &unit,
+            unit_name.as_deref(),
             &cursor,
             self.user_mode,
             self.log_priority_filter,
@@ -630,6 +692,7 @@ impl App {
 
     pub fn toggle_user_mode(&mut self) {
         self.user_mode = !self.user_mode;
+        self.system_logs_mode = false;
         self.last_selected_service = None;
         self.logs.clear();
         self.invalidate_log_entry_heights_cache();
@@ -1048,6 +1111,7 @@ mod tests {
             action_receiver: None,
             refresh_receiver: None,
             status_message: None,
+            system_logs_mode: false,
             log_paused: false,
             logs_at_bottom: true,
             last_refreshed: None,
@@ -2492,5 +2556,49 @@ mod tests {
         app.next_unit_file_match(5); // visible = 5, match at 15 is out of view
         assert_eq!(app.unit_file_search_match_index, Some(1));
         assert_eq!(app.unit_file_scroll, 15);
+    }
+
+    // System logs mode tests
+
+    #[test]
+    fn test_toggle_system_logs_enters() {
+        let mut app = test_app_with_subs(&["running"]);
+        assert!(!app.system_logs_mode);
+        assert!(!app.show_logs);
+        app.toggle_system_logs();
+        assert!(app.system_logs_mode);
+        assert!(app.show_logs);
+        assert!(!app.log_paused);
+        assert!(app.log_filters_dirty);
+    }
+
+    #[test]
+    fn test_toggle_system_logs_exits() {
+        let mut app = test_app_with_subs(&["running"]);
+        app.system_logs_mode = true;
+        app.show_logs = true;
+        app.toggle_system_logs();
+        assert!(!app.system_logs_mode);
+        assert!(!app.show_logs);
+        assert!(!app.log_paused);
+    }
+
+    #[test]
+    fn test_toggle_logs_clears_system_mode() {
+        let mut app = test_app_with_subs(&["running"]);
+        app.system_logs_mode = true;
+        app.show_logs = true;
+        app.toggle_logs();
+        assert!(!app.system_logs_mode);
+        assert!(!app.show_logs);
+    }
+
+    #[test]
+    fn test_toggle_user_mode_clears_system_logs() {
+        let mut app = test_app_with_subs(&["running"]);
+        app.system_logs_mode = true;
+        app.show_logs = true;
+        app.toggle_user_mode();
+        assert!(!app.system_logs_mode);
     }
 }

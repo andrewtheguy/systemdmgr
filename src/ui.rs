@@ -278,7 +278,9 @@ pub fn render(frame: &mut Frame, app: &mut App, live_indicator_on: bool) {
 
     // Logs panel (only if visible)
     if let Some(logs_area) = logs_area {
-        let mut logs_title = if let Some(ref service_name) = app.last_selected_service {
+        let mut logs_title = if app.system_logs_mode {
+            "System Logs".to_string()
+        } else if let Some(ref service_name) = app.last_selected_service {
             format!("Logs: {}", service_name)
         } else {
             "Logs".to_string()
@@ -313,12 +315,16 @@ pub fn render(frame: &mut Frame, app: &mut App, live_indicator_on: bool) {
         }
 
         // Track the last seen invocation ID to detect service restarts across None gaps
-        let mut last_invocation_id: Option<&str> = app
-            .logs
-            .iter()
-            .take(app.logs_scroll)
-            .rev()
-            .find_map(|e| e.invocation_id.as_deref());
+        // (only meaningful for per-service logs; skip in system-wide mode)
+        let mut last_invocation_id: Option<&str> = if app.system_logs_mode {
+            None
+        } else {
+            app.logs
+                .iter()
+                .take(app.logs_scroll)
+                .rev()
+                .find_map(|e| e.invocation_id.as_deref())
+        };
 
         // Create log content with scroll, search highlighting, and boot separators
         let mut log_lines: Vec<Line> = Vec::new();
@@ -329,8 +335,9 @@ pub fn render(frame: &mut Frame, app: &mut App, live_indicator_on: bool) {
             }
             if entry_idx > 0 {
                 let prev = &app.logs[entry_idx - 1];
+                let check_invocation = !app.system_logs_mode;
                 let (boot_changed, invocation_changed) =
-                    log_boundary_before_entry(prev, entry, last_invocation_id);
+                    log_boundary_before_entry(prev, entry, if check_invocation { last_invocation_id } else { None });
 
                 // Boot boundary separator
                 if boot_changed {
@@ -383,8 +390,9 @@ pub fn render(frame: &mut Frame, app: &mut App, live_indicator_on: bool) {
                     }
                 }
             }
-            if let Some(id) = entry.invocation_id.as_deref() {
-                last_invocation_id = Some(id);
+            if !app.system_logs_mode
+                && let Some(id) = entry.invocation_id.as_deref() {
+                    last_invocation_id = Some(id);
             }
             log_lines.push(render_log_entry(entry, entry_idx, app));
             entries_shown += 1;
@@ -521,22 +529,22 @@ pub fn render(frame: &mut Frame, app: &mut App, live_indicator_on: bool) {
         "Type to search logs | Esc/Enter: Exit search | ?: Help & more"
     } else if app.show_logs && !app.log_search_query.is_empty() {
         if app.log_paused {
-            "q/Esc: Back | j/k: Scroll | n/N: Next/Prev match | x: Actions | f: Resume | p: Priority | t: Time | /: Search | ?: Help & more"
+            "q/Esc: Back | j/k: Scroll | n/N: Next/Prev match | x: Actions | f: Resume | L: All logs | p: Priority | t: Time | /: Search | ?: Help & more"
         } else {
-            "q/Esc: Back | j/k: Scroll | n/N: Next/Prev match | x: Actions | f: Pause | p: Priority | t: Time | /: Search | ?: Help & more"
+            "q/Esc: Back | j/k: Scroll | n/N: Next/Prev match | x: Actions | f: Pause | L: All logs | p: Priority | t: Time | /: Search | ?: Help & more"
         }
     } else if app.show_logs {
         if app.log_paused {
-            "q/Esc: Back | j/k: Scroll | g/G: Top/Bottom | x: Actions | f: Resume | /: Search | p: Priority | t: Time | ?: Help & more"
+            "q/Esc: Back | j/k: Scroll | g/G: Top/Bottom | x: Actions | f: Resume | L: All logs | /: Search | p: Priority | t: Time | ?: Help & more"
         } else {
-            "q/Esc: Back | j/k: Scroll | g/G: Top/Bottom | x: Actions | f: Pause | /: Search | p: Priority | t: Time | ?: Help & more"
+            "q/Esc: Back | j/k: Scroll | g/G: Top/Bottom | x: Actions | f: Pause | L: All logs | /: Search | p: Priority | t: Time | ?: Help & more"
         }
     } else if app.search_mode {
         "Type to search | Esc/Enter: Exit search | ?: Help & more"
     } else if !app.search_query.is_empty() || app.status_filter.is_some() || app.file_state_filter.is_some() {
-        "q: Quit | /: Search | s: Status | f: File state | x: Actions | i: Details | t: Type | l: Logs | r: Refresh | u: User/System | Esc: Clear | ?: Help & more"
+        "q: Quit | /: Search | s: Status | f: File state | x: Actions | i: Details | t: Type | l: Logs | L: All logs | r: Refresh | u: User/System | Esc: Clear | ?: Help & more"
     } else {
-        "q/Esc: Quit | /: Search | s: Status | f: File state | x: Actions | i: Details | t: Type | l: Logs | r: Refresh | u: User/System | ?: Help & more"
+        "q/Esc: Quit | /: Search | s: Status | f: File state | x: Actions | i: Details | t: Type | l: Logs | L: All logs | r: Refresh | u: User/System | ?: Help & more"
     };
     let footer = Paragraph::new(footer_text)
         .style(Style::default().fg(Color::DarkGray))
@@ -646,14 +654,16 @@ fn log_entry_visual_heights(app: &App, content_width: usize) -> Vec<usize> {
         let mut entry_lines = wrapped_line_count(&render_log_entry(entry, entry_idx, app), content_width);
         if entry_idx > 0 {
             let prev = &app.logs[entry_idx - 1];
+            let check_invocation = !app.system_logs_mode;
             let (boot_changed, invocation_changed) =
-                log_boundary_before_entry(prev, entry, last_invocation_id);
+                log_boundary_before_entry(prev, entry, if check_invocation { last_invocation_id } else { None });
             if boot_changed || invocation_changed {
                 entry_lines += 1;
             }
         }
-        if let Some(id) = entry.invocation_id.as_deref() {
-            last_invocation_id = Some(id);
+        if !app.system_logs_mode
+            && let Some(id) = entry.invocation_id.as_deref() {
+                last_invocation_id = Some(id);
         }
         heights.push(entry_lines);
     }
@@ -856,6 +866,7 @@ fn render_help(frame: &mut Frame, app: &App) {
             Line::from("  x             Action picker"),
             Line::from("  f             Toggle live tail (auto-refresh)"),
             Line::from("  l             Exit logs"),
+            Line::from("  L             System-wide logs"),
             Line::from("  q / Esc       Clear search / Exit logs"),
             Line::from("  ?             Toggle this help"),
         ]);
@@ -881,6 +892,7 @@ fn render_help(frame: &mut Frame, app: &App) {
             Line::from("  x             Action picker"),
             Line::from("  R             Daemon reload"),
             Line::from("  l             Open logs"),
+            Line::from("  L             System-wide logs"),
             Line::from("  v             View unit file"),
             Line::from(""),
             Line::from(vec![Span::styled("Mouse", section_style)]),

@@ -314,15 +314,19 @@ impl SystemdUnit {
 }
 
 pub fn fetch_log_entries(
-    unit_name: &str,
+    unit_name: Option<&str>,
     lines: usize,
     user_mode: bool,
     priority: Option<u8>,
     time_range: TimeRange,
 ) -> Result<Vec<LogEntry>, String> {
-    let unit_flag = if user_mode { "--user-unit" } else { "-u" };
     let lines_str = lines.to_string();
-    let mut args = vec![unit_flag, unit_name, "-n", &lines_str, "--no-pager", "--output=json"];
+    let mut args = vec!["-n", &lines_str, "--no-pager", "--output=json"];
+    if let Some(name) = unit_name {
+        let unit_flag = if user_mode { "--user-unit" } else { "-u" };
+        args.insert(0, name);
+        args.insert(0, unit_flag);
+    }
 
     let priority_str;
     if let Some(p) = priority {
@@ -353,15 +357,19 @@ pub fn fetch_log_entries(
 }
 
 pub fn fetch_log_entries_after_cursor(
-    unit_name: &str,
+    unit_name: Option<&str>,
     cursor: &str,
     user_mode: bool,
     priority: Option<u8>,
     time_range: TimeRange,
 ) -> Result<Vec<LogEntry>, String> {
-    let unit_flag = if user_mode { "--user-unit" } else { "-u" };
     let after_cursor = format!("--after-cursor={}", cursor);
-    let mut args = vec![unit_flag, unit_name, &after_cursor, "--no-pager", "--output=json"];
+    let mut args = vec![&*after_cursor, "--no-pager", "--output=json"];
+    if let Some(name) = unit_name {
+        let unit_flag = if user_mode { "--user-unit" } else { "-u" };
+        args.insert(0, name);
+        args.insert(0, unit_flag);
+    }
 
     let priority_str;
     if let Some(p) = priority {

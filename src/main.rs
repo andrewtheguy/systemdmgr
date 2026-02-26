@@ -407,6 +407,9 @@ fn main() -> io::Result<()> {
                     KeyCode::Char('x') => {
                         app.open_action_picker();
                     }
+                    KeyCode::Char('L') => {
+                        app.toggle_system_logs();
+                    }
                     KeyCode::Char('f') => {
                         app.toggle_log_paused();
                         if !app.log_paused {
@@ -424,6 +427,9 @@ fn main() -> io::Result<()> {
                     }
                     KeyCode::Char('l') => {
                         app.toggle_logs();
+                    }
+                    KeyCode::Char('L') => {
+                        app.toggle_system_logs();
                     }
                     KeyCode::Esc => {
                         if !app.search_query.is_empty() {
