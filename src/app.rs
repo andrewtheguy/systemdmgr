@@ -569,6 +569,8 @@ impl App {
         self.log_paused = !self.log_paused;
         if self.log_paused {
             if !self.logs.is_empty() {
+                // Clamp stale scroll (e.g. usize::MAX sentinel) before computing selection
+                self.logs_scroll = self.logs_scroll.min(self.logs.len().saturating_sub(1));
                 // Start selection at the last visible entry (bottom of viewport)
                 let mut used = 0;
                 let mut last = self.logs_scroll;

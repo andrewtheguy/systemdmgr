@@ -555,10 +555,14 @@ fn handle_mouse_event(app: &mut App, mouse: MouseEvent, frame_size: Rect) {
         if let Some(logs_panel) = regions.logs_panel {
             match mouse.kind {
                 MouseEventKind::ScrollUp => {
-                    app.scroll_logs_up(3);
+                    if mouse_in_rect(mouse, logs_panel) {
+                        app.scroll_logs_up(3);
+                    }
                 }
                 MouseEventKind::ScrollDown => {
-                    app.scroll_logs_down(3);
+                    if mouse_in_rect(mouse, logs_panel) {
+                        app.scroll_logs_down(3);
+                    }
                 }
                 MouseEventKind::Down(MouseButton::Left) => {
                     if app.system_logs_mode && mouse_in_rect(mouse, logs_panel) {
