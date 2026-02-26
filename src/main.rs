@@ -591,7 +591,12 @@ fn handle_mouse_event(app: &mut App, mouse: MouseEvent, frame_size: Rect) {
                     let y_in_list = mouse.row.saturating_sub(regions.services_list.y + 1);
                     let clicked_index = app.list_state.offset() + y_in_list as usize;
                     if clicked_index < app.filtered_indices.len() {
-                        app.list_state.select(Some(clicked_index));
+                        if app.list_state.selected() == Some(clicked_index) {
+                            // Re-click on selected entry → open details
+                            app.open_details();
+                        } else {
+                            app.list_state.select(Some(clicked_index));
+                        }
                     }
                 }
             }
