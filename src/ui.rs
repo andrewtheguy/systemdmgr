@@ -7,11 +7,29 @@ use ratatui::{
 };
 use unicode_width::UnicodeWidthStr;
 
+use std::sync::OnceLock;
+
 use crate::app::App;
 use crate::service::{
     format_bytes, format_cpu_time, format_log_timestamp, priority_label, COLOR_MUTED,
     LogEntry, TimeRange, UnitAction, FILE_STATE_OPTIONS, PRIORITY_LABELS, TIME_RANGES, UNIT_TYPES,
 };
+
+fn get_current_username() -> &'static str {
+    static USERNAME: OnceLock<String> = OnceLock::new();
+    USERNAME.get_or_init(|| {
+        std::env::var("USER")
+            .or_else(|_| std::env::var("LOGNAME"))
+            .unwrap_or_else(|_| {
+                std::process::Command::new("whoami")
+                    .output()
+                    .ok()
+                    .and_then(|o| String::from_utf8(o.stdout).ok())
+                    .map(|s| s.trim().to_string())
+                    .unwrap_or_else(|| "unknown".to_string())
+            })
+    })
+}
 
 /// Layout regions for mouse hit testing
 pub struct LayoutRegions {
@@ -175,7 +193,8 @@ pub fn render(frame: &mut Frame, app: &mut App, live_indicator_on: bool) {
             .block(Block::default().borders(Borders::ALL))
     } else {
         let scope_label = if app.user_mode { "User" } else { "System" };
-        let title = format!("SystemD {} [{}]", app.unit_type.label(), scope_label);
+        let username = get_current_username();
+        let title = format!("SystemD {} [{}] (user:{})", app.unit_type.label(), scope_label, username);
         let refreshed = app
             .last_refreshed
             .map(|t| format!("  (loaded {})", t.format("%b %d %H:%M:%S %Z")))

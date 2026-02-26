@@ -360,9 +360,21 @@ fn main() -> io::Result<()> {
                     KeyCode::Esc | KeyCode::Char('q') => {
                         if !app.log_search_query.is_empty() {
                             app.clear_log_search();
+                        } else if app.navigated_from_system_logs {
+                            // Return to global system logs
+                            app.navigated_from_system_logs = false;
+                            app.system_logs_mode = true;
+                            app.log_paused = false;
+                            app.log_selected_entry = None;
+                            app.last_selected_service = None;
+                            app.logs.clear();
+                            app.invalidate_log_entry_heights_cache();
+                            app.clear_log_search();
+                            app.log_filters_dirty = true;
                         } else {
                             app.log_paused = false;
                             app.show_logs = false;
+                            app.system_logs_mode = false;
                         }
                     }
                     KeyCode::Char('/') => {

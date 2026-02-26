@@ -68,6 +68,7 @@ pub struct App {
     pub refresh_receiver: Option<mpsc::Receiver<Vec<SystemdUnit>>>,
     pub status_message: Option<String>,
     pub system_logs_mode: bool,
+    pub navigated_from_system_logs: bool,
     pub log_paused: bool,
     pub log_selected_entry: Option<usize>,
     pub logs_at_bottom: bool,
@@ -141,6 +142,7 @@ impl App {
             refresh_receiver: None,
             status_message: None,
             system_logs_mode: false,
+            navigated_from_system_logs: false,
             log_paused: false,
             log_selected_entry: None,
             logs_at_bottom: true,
@@ -541,6 +543,7 @@ impl App {
         self.log_paused = false;
         self.log_selected_entry = None;
         self.system_logs_mode = false;
+        self.navigated_from_system_logs = false;
         if !self.show_logs {
             self.last_selected_service = None;
         }
@@ -549,12 +552,14 @@ impl App {
     pub fn toggle_system_logs(&mut self) {
         if self.system_logs_mode && self.show_logs {
             self.system_logs_mode = false;
+            self.navigated_from_system_logs = false;
             self.show_logs = false;
             self.log_paused = false;
             self.log_selected_entry = None;
             self.last_selected_service = None;
         } else {
             self.system_logs_mode = true;
+            self.navigated_from_system_logs = false;
             self.show_logs = true;
             self.log_paused = false;
             self.log_selected_entry = None;
@@ -621,6 +626,7 @@ impl App {
             self.list_state.select(Some(pos));
         }
         // Switch to per-unit log view
+        self.navigated_from_system_logs = true;
         self.system_logs_mode = false;
         self.log_selected_entry = None;
         self.last_selected_service = None;
@@ -1178,6 +1184,7 @@ mod tests {
             refresh_receiver: None,
             status_message: None,
             system_logs_mode: false,
+            navigated_from_system_logs: false,
             log_paused: false,
             log_selected_entry: None,
             logs_at_bottom: true,
