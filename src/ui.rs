@@ -97,16 +97,17 @@ fn build_footer_line(segments: &[&str], suffix: &str, width: usize) -> Line<'sta
     let sep_len = sep.len();
 
     // Reserve space for: " | " + suffix (or just suffix if no segments fit)
-    let suffix_reserved = sep_len + suffix.len();
+    let suffix_w = suffix.width();
+    let suffix_reserved = sep_len + suffix_w;
 
     // Determine how many segments fit
     let mut total_left_width = 0usize;
     let mut fit_count = 0usize;
     for (i, seg) in segments.iter().enumerate() {
         let needed = if i == 0 {
-            seg.len()
+            seg.width()
         } else {
-            sep_len + seg.len()
+            sep_len + seg.width()
         };
         let candidate = total_left_width + needed;
         if candidate + suffix_reserved > width {
@@ -125,9 +126,9 @@ fn build_footer_line(segments: &[&str], suffix: &str, width: usize) -> Line<'sta
 
     // Calculate padding to right-align the suffix
     let used = if fit_count > 0 {
-        left_text.len() + suffix_reserved
+        left_text.width() + suffix_reserved
     } else {
-        suffix.len()
+        suffix_w
     };
     let padding = width.saturating_sub(used);
 
