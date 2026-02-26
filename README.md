@@ -5,7 +5,7 @@ A terminal UI for managing and browsing systemd units.
 ![Rust](https://img.shields.io/badge/rust-stable-orange)
 
 > [!WARNING]
-> This project is a work in progress and is currently a proof of concept. Features are still incomplete and subject to change.
+> This project is a work in progress and features are still incomplete and subject to change.
 
 ## Features
 
