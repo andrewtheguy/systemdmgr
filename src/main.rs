@@ -481,7 +481,11 @@ fn main() -> io::Result<()> {
                     KeyCode::Char('r') => {
                         app.load_services();
                         if app.error.is_none() {
-                            app.status_message = Some("Refreshed".into());
+                            let ts = app
+                                .last_refreshed
+                                .map(|t| format!(" refreshed at {}", t.format("%b %d %H:%M:%S %Z")))
+                                .unwrap_or_default();
+                            app.status_message = Some(format!("SystemD Services{ts}"));
                         }
                     }
                     KeyCode::Char('u') => {
@@ -600,6 +604,7 @@ fn handle_mouse_event(app: &mut App, mouse: MouseEvent, frame_size: Rect) {
         match mouse.kind {
             MouseEventKind::Down(MouseButton::Left) => {
                 if mouse_in_rect(mouse, regions.services_list) {
+                    app.clear_status_message();
                     let y_in_list = mouse.row.saturating_sub(regions.services_list.y + 1);
                     let clicked_index = app.list_state.offset() + y_in_list as usize;
                     if clicked_index < app.filtered_indices.len() {

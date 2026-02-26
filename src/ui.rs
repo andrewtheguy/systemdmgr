@@ -82,6 +82,67 @@ pub fn log_entry_at_y(app: &App, y_in_panel: usize) -> Option<usize> {
     None
 }
 
+/// Build a footer `Line` with left-side keybinding segments (truncatable) and a
+/// right-aligned suffix (always shown). When all segments don't fit, they are
+/// dropped from the right so the most important (leftmost) ones stay visible.
+fn build_footer_line(segments: &[&str], suffix: &str, width: usize) -> Line<'static> {
+    let style = Style::default().fg(Color::DarkGray);
+
+    if segments.is_empty() {
+        // Simple footer — just center/left-align the suffix text as before
+        return Line::from(Span::styled(suffix.to_string(), style));
+    }
+
+    let sep = " | ";
+    let sep_len = sep.len();
+
+    // Reserve space for: " | " + suffix (or just suffix if no segments fit)
+    let suffix_w = suffix.width();
+    let suffix_reserved = sep_len + suffix_w;
+
+    // Determine how many segments fit
+    let mut total_left_width = 0usize;
+    let mut fit_count = 0usize;
+    for (i, seg) in segments.iter().enumerate() {
+        let needed = if i == 0 {
+            seg.width()
+        } else {
+            sep_len + seg.width()
+        };
+        let candidate = total_left_width + needed;
+        if candidate + suffix_reserved > width {
+            break;
+        }
+        total_left_width = candidate;
+        fit_count += 1;
+    }
+
+    // Build left part
+    let left_text: String = if fit_count == 0 {
+        String::new()
+    } else {
+        segments[..fit_count].join(sep)
+    };
+
+    // Calculate padding to right-align the suffix
+    let used = if fit_count > 0 {
+        left_text.width() + suffix_reserved
+    } else {
+        suffix_w
+    };
+    let padding = width.saturating_sub(used);
+
+    let mut spans = Vec::new();
+    if fit_count > 0 {
+        spans.push(Span::styled(left_text, style));
+        spans.push(Span::styled(sep.to_string(), style));
+    }
+    spans.push(Span::styled(" ".repeat(padding), style));
+    spans.push(Span::styled(suffix.to_string(), style));
+
+    Line::from(spans)
+}
+
 pub fn render(frame: &mut Frame, app: &mut App, live_indicator_on: bool) {
     // Load logs for selected service if selection changed (only if logs are visible)
     if app.show_logs {
@@ -586,58 +647,62 @@ pub fn render(frame: &mut Frame, app: &mut App, live_indicator_on: bool) {
         frame.render_widget(paragraph, unit_file_area);
     }
 
-    // Footer with keybindings
-    let footer_text = if app.show_help {
-        "Press any key to close"
+    // Footer with keybindings — segments are truncatable from the right,
+    // suffix is always visible and right-aligned.
+    let content_width = chunks[2].width.saturating_sub(2) as usize; // subtract borders
+
+    let (segments, suffix): (&[&str], &str) = if app.show_help {
+        (&[], "Press any key to close")
     } else if app.show_confirm && app.action_in_progress {
-        "Executing..."
+        (&[], "Executing...")
     } else if app.show_confirm && app.action_result.is_some() {
-        "Press any key to dismiss"
+        (&[], "Press any key to dismiss")
     } else if app.show_confirm {
-        "Y: Confirm | N/Esc: Cancel"
+        (&[], "Y: Confirm | N/Esc: Cancel")
     } else if app.show_action_picker {
-        "j/k: Navigate | Enter/shortcut: Select | Esc/x: Close"
+        (&["j/k: Navigate", "Enter/shortcut: Select", "Esc/x: Close"], "?: Help")
     } else if app.show_details {
-        "j/k: Scroll | g/G: Top/Bottom | PgUp/PgDn: Page | Esc/i: Close"
+        (&["j/k: Scroll", "g/G: Top/Bottom", "PgUp/PgDn: Page", "Esc/i: Close"], "?: Help")
     } else if app.show_status_picker {
-        "j/k: Navigate | Enter: Select | Esc/s: Close"
+        (&["j/k: Navigate", "Enter: Select", "Esc/s: Close"], "?: Help")
     } else if app.show_type_picker {
-        "j/k: Navigate | Enter: Select | Esc/t: Close"
+        (&["j/k: Navigate", "Enter: Select", "Esc/t: Close"], "?: Help")
     } else if app.show_priority_picker {
-        "j/k: Navigate | Enter: Select | Esc/p: Close"
+        (&["j/k: Navigate", "Enter: Select", "Esc/p: Close"], "?: Help")
     } else if app.show_time_picker {
-        "j/k: Navigate | Enter: Select | Esc/T: Close"
+        (&["j/k: Navigate", "Enter: Select", "Esc/T: Close"], "?: Help")
     } else if app.show_file_state_picker {
-        "j/k: Navigate | Enter: Select | Esc/f: Close"
+        (&["j/k: Navigate", "Enter: Select", "Esc/f: Close"], "?: Help")
     } else if app.unit_file_search_mode {
-        "Type to search unit file | Esc/Enter: Exit search | ?: Help & more"
+        (&["Type to search unit file", "Esc/Enter: Exit search"], "?: Help & more")
     } else if app.show_unit_file && !app.unit_file_search_query.is_empty() {
-        "v/Esc: Back | j/k: Scroll | n/N: Next/Prev match | /: Search | ?: Help & more"
+        (&["v/Esc: Back", "j/k: Scroll", "n/N: Next/Prev match", "/: Search"], "?: Help & more")
     } else if app.show_unit_file {
-        "v/Esc: Back | j/k: Scroll | g/G: Top/Bottom | /: Search | ?: Help & more"
+        (&["v/Esc: Back", "j/k: Scroll", "g/G: Top/Bottom", "/: Search"], "?: Help & more")
     } else if app.log_search_mode {
-        "Type to search logs | Esc/Enter: Exit search | ?: Help & more"
+        (&["Type to search logs", "Esc/Enter: Exit search"], "?: Help & more")
     } else if app.show_logs && !app.log_search_query.is_empty() {
         if app.log_paused {
-            "q/Esc: Back | j/k: Scroll | n/N: Next/Prev match | x: Actions | f: Resume | L: All logs | p: Priority | t: Time | /: Search | ?: Help & more"
+            (&["q/Esc: Back", "j/k: Scroll", "n/N: Next/Prev match", "x: Actions", "f: Resume", "L: All logs", "p: Priority", "t: Time", "/: Search"], "?: Help & more")
         } else {
-            "q/Esc: Back | j/k: Scroll | n/N: Next/Prev match | x: Actions | f: Pause | L: All logs | p: Priority | t: Time | /: Search | ?: Help & more"
+            (&["q/Esc: Back", "j/k: Scroll", "n/N: Next/Prev match", "x: Actions", "f: Pause", "L: All logs", "p: Priority", "t: Time", "/: Search"], "?: Help & more")
         }
     } else if app.show_logs {
         if app.log_paused {
-            "q/Esc: Back | j/k: Scroll | g/G: Top/Bottom | x: Actions | f: Resume | L: All logs | /: Search | p: Priority | t: Time | ?: Help & more"
+            (&["q/Esc: Back", "j/k: Scroll", "g/G: Top/Bottom", "x: Actions", "f: Resume", "L: All logs", "/: Search", "p: Priority", "t: Time"], "?: Help & more")
         } else {
-            "q/Esc: Back | j/k: Scroll | g/G: Top/Bottom | x: Actions | f: Pause | L: All logs | /: Search | p: Priority | t: Time | ?: Help & more"
+            (&["q/Esc: Back", "j/k: Scroll", "g/G: Top/Bottom", "x: Actions", "f: Pause", "L: All logs", "/: Search", "p: Priority", "t: Time"], "?: Help & more")
         }
     } else if app.search_mode {
-        "Type to search | Esc/Enter: Exit search | ?: Help & more"
+        (&["Type to search", "Esc/Enter: Exit search"], "?: Help & more")
     } else if !app.search_query.is_empty() || app.status_filter.is_some() || app.file_state_filter.is_some() {
-        "q: Quit | /: Search | s: Status | f: File state | x: Actions | i: Details | t: Type | l: Logs | L: All logs | r: Refresh | u: User/System | Esc: Clear | ?: Help & more"
+        (&["q: Quit", "/: Search", "s: Status", "f: File state", "x: Actions", "i: Details", "t: Type", "l: Logs", "L: All logs", "r: Refresh", "u: User/System", "Esc: Clear"], "?: Help & more")
     } else {
-        "q/Esc: Quit | /: Search | s: Status | f: File state | x: Actions | i: Details | t: Type | l: Logs | L: All logs | r: Refresh | u: User/System | ?: Help & more"
+        (&["q/Esc: Quit", "/: Search", "s: Status", "f: File state", "x: Actions", "i: Details", "t: Type", "l: Logs", "L: All logs", "r: Refresh", "u: User/System"], "?: Help & more")
     };
-    let footer = Paragraph::new(footer_text)
-        .style(Style::default().fg(Color::DarkGray))
+
+    let footer_line = build_footer_line(segments, suffix, content_width);
+    let footer = Paragraph::new(footer_line)
         .block(Block::default().borders(Borders::ALL));
     frame.render_widget(footer, chunks[2]);
 
