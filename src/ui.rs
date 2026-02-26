@@ -47,6 +47,23 @@ pub fn get_layout_regions(area: Rect, show_logs: bool) -> LayoutRegions {
     }
 }
 
+/// Map a Y position within the logs panel content area to a log entry index.
+pub fn log_entry_at_y(app: &App, y_in_panel: usize) -> Option<usize> {
+    let mut y = 0;
+    for (i, &height) in app
+        .cached_entry_heights
+        .iter()
+        .enumerate()
+        .skip(app.logs_scroll)
+    {
+        if y_in_panel < y + height {
+            return Some(i);
+        }
+        y += height;
+    }
+    None
+}
+
 pub fn render(frame: &mut Frame, app: &mut App, live_indicator_on: bool) {
     // Load logs for selected service if selection changed (only if logs are visible)
     if app.show_logs {
@@ -318,6 +335,37 @@ pub fn render(frame: &mut Frame, app: &mut App, live_indicator_on: bool) {
             app.logs_scroll = app.logs_scroll.min(bottom_scroll);
         }
 
+        // Auto-scroll to keep selected entry visible
+        if let Some(sel) = app.log_selected_entry {
+            if sel < app.logs_scroll {
+                app.logs_scroll = sel;
+            } else {
+                // Count visual lines from logs_scroll to see if sel is beyond viewport
+                let mut visual_lines = 0;
+                for i in app.logs_scroll..=sel {
+                    if let Some(&h) = app.cached_entry_heights.get(i) {
+                        visual_lines += h;
+                    }
+                }
+                if visual_lines > visible_lines {
+                    // Scroll forward so sel is the last visible entry
+                    let mut lines_needed = 0;
+                    let mut new_scroll = sel;
+                    for i in (0..=sel).rev() {
+                        if let Some(&h) = app.cached_entry_heights.get(i) {
+                            lines_needed += h;
+                            if lines_needed > visible_lines {
+                                new_scroll = i + 1;
+                                break;
+                            }
+                            new_scroll = i;
+                        }
+                    }
+                    app.logs_scroll = new_scroll;
+                }
+            }
+        }
+
         // Track the last seen invocation ID to detect service restarts across None gaps
         // (only meaningful for per-service logs; skip in system-wide mode)
         let mut last_invocation_id: Option<&str> = if app.system_logs_mode {
@@ -398,7 +446,26 @@ pub fn render(frame: &mut Frame, app: &mut App, live_indicator_on: bool) {
                 && let Some(id) = entry.invocation_id.as_deref() {
                     last_invocation_id = Some(id);
             }
-            log_lines.push(render_log_entry(entry, entry_idx, app));
+            let mut line = render_log_entry(entry, entry_idx, app);
+            if app.log_selected_entry == Some(entry_idx) {
+                // Apply selection highlight: DarkGray bg, brighten dim fg spans
+                line = Line::from(
+                    line.spans
+                        .into_iter()
+                        .map(|span| {
+                            let mut style = span.style.bg(Color::DarkGray);
+                            // Brighten DarkGray/muted foreground so it's readable on DarkGray bg
+                            if span.style.fg == Some(Color::DarkGray)
+                                || span.style.fg == Some(COLOR_MUTED)
+                            {
+                                style = style.fg(Color::Gray);
+                            }
+                            Span::styled(span.content, style)
+                        })
+                        .collect::<Vec<_>>(),
+                );
+            }
+            log_lines.push(line);
             entries_shown += 1;
         }
 
@@ -1816,6 +1883,7 @@ mod tests {
             boot_id: boot_id.map(str::to_string),
             invocation_id: invocation_id.map(str::to_string),
             cursor: None,
+            unit: None,
         }
     }
 

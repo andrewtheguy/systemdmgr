@@ -375,10 +375,23 @@ fn main() -> io::Result<()> {
                         app.prev_log_match(visible_lines);
                     }
                     KeyCode::Char('j') | KeyCode::Down => {
-                        app.scroll_logs_down(1);
+                        if app.log_selected_entry.is_some() {
+                            app.log_select_next();
+                        } else {
+                            app.scroll_logs_down(1);
+                        }
                     }
                     KeyCode::Char('k') | KeyCode::Up => {
-                        app.scroll_logs_up(1);
+                        if app.log_selected_entry.is_some() {
+                            app.log_select_previous();
+                        } else {
+                            app.scroll_logs_up(1);
+                        }
+                    }
+                    KeyCode::Enter => {
+                        if app.log_selected_entry.is_some() && app.system_logs_mode {
+                            app.navigate_to_log_unit();
+                        }
                     }
                     KeyCode::Char('g') | KeyCode::Home => {
                         app.logs_go_to_top();
@@ -539,14 +552,24 @@ fn handle_mouse_event(app: &mut App, mouse: MouseEvent, frame_size: Rect) {
     let regions = ui::get_layout_regions(frame_size, app.show_logs);
 
     if app.show_logs {
-        // Log mode: all scroll events go to logs, clicks are ignored
-        if regions.logs_panel.is_some() {
+        if let Some(logs_panel) = regions.logs_panel {
             match mouse.kind {
                 MouseEventKind::ScrollUp => {
                     app.scroll_logs_up(3);
                 }
                 MouseEventKind::ScrollDown => {
                     app.scroll_logs_down(3);
+                }
+                MouseEventKind::Down(MouseButton::Left) => {
+                    if app.system_logs_mode && mouse_in_rect(mouse, logs_panel) {
+                        // +1 for the border top row
+                        let y_in_panel = mouse.row.saturating_sub(logs_panel.y + 1) as usize;
+                        if let Some(entry_idx) = ui::log_entry_at_y(app, y_in_panel) {
+                            app.log_selected_entry = Some(entry_idx);
+                            app.log_paused = true;
+                            app.navigate_to_log_unit();
+                        }
+                    }
                 }
                 _ => {}
             }

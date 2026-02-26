@@ -67,6 +67,7 @@ pub struct LogEntry {
     pub boot_id: Option<String>,
     pub invocation_id: Option<String>,
     pub cursor: Option<String>,
+    pub unit: Option<String>,
 }
 
 pub const PRIORITY_LABELS: [&str; 8] = [
@@ -410,6 +411,7 @@ fn parse_journal_json_line(line: &str) -> LogEntry {
             boot_id: None,
             invocation_id: None,
             cursor: None,
+            unit: None,
         };
     };
 
@@ -443,6 +445,8 @@ fn parse_journal_json_line(line: &str) -> LogEntry {
 
     let cursor = val["__CURSOR"].as_str().map(|s| s.to_string());
 
+    let unit = val["_SYSTEMD_UNIT"].as_str().map(|s| s.to_string());
+
     LogEntry {
         timestamp,
         priority,
@@ -452,6 +456,7 @@ fn parse_journal_json_line(line: &str) -> LogEntry {
         boot_id,
         invocation_id,
         cursor,
+        unit,
     }
 }
 
