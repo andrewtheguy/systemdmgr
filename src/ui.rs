@@ -7,11 +7,29 @@ use ratatui::{
 };
 use unicode_width::UnicodeWidthStr;
 
+use std::sync::OnceLock;
+
 use crate::app::App;
 use crate::service::{
     format_bytes, format_cpu_time, format_log_timestamp, priority_label, COLOR_MUTED,
     LogEntry, TimeRange, UnitAction, FILE_STATE_OPTIONS, PRIORITY_LABELS, TIME_RANGES, UNIT_TYPES,
 };
+
+fn get_current_username() -> &'static str {
+    static USERNAME: OnceLock<String> = OnceLock::new();
+    USERNAME.get_or_init(|| {
+        std::env::var("USER")
+            .or_else(|_| std::env::var("LOGNAME"))
+            .unwrap_or_else(|_| {
+                std::process::Command::new("whoami")
+                    .output()
+                    .ok()
+                    .and_then(|o| String::from_utf8(o.stdout).ok())
+                    .map(|s| s.trim().to_string())
+                    .unwrap_or_else(|| "unknown".to_string())
+            })
+    })
+}
 
 /// Layout regions for mouse hit testing
 pub struct LayoutRegions {
@@ -45,6 +63,23 @@ pub fn get_layout_regions(area: Rect, show_logs: bool) -> LayoutRegions {
             logs_panel: None,
         }
     }
+}
+
+/// Map a Y position within the logs panel content area to a log entry index.
+pub fn log_entry_at_y(app: &App, y_in_panel: usize) -> Option<usize> {
+    let mut y = 0;
+    for (i, &height) in app
+        .cached_entry_heights
+        .iter()
+        .enumerate()
+        .skip(app.logs_scroll)
+    {
+        if y_in_panel < y + height {
+            return Some(i);
+        }
+        y += height;
+    }
+    None
 }
 
 pub fn render(frame: &mut Frame, app: &mut App, live_indicator_on: bool) {
@@ -152,9 +187,14 @@ pub fn render(frame: &mut Frame, app: &mut App, live_indicator_on: bool) {
         Paragraph::new(msg.as_str())
             .style(Style::default().fg(Color::Green).add_modifier(Modifier::BOLD))
             .block(Block::default().borders(Borders::ALL))
+    } else if app.system_logs_mode {
+        Paragraph::new("SystemD Logs")
+            .style(Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD))
+            .block(Block::default().borders(Borders::ALL))
     } else {
         let scope_label = if app.user_mode { "User" } else { "System" };
-        let title = format!("SystemD {} [{}]", app.unit_type.label(), scope_label);
+        let username = get_current_username();
+        let title = format!("SystemD {} [{}] (user:{})", app.unit_type.label(), scope_label, username);
         let refreshed = app
             .last_refreshed
             .map(|t| format!("  (loaded {})", t.format("%b %d %H:%M:%S %Z")))
@@ -278,7 +318,9 @@ pub fn render(frame: &mut Frame, app: &mut App, live_indicator_on: bool) {
 
     // Logs panel (only if visible)
     if let Some(logs_area) = logs_area {
-        let mut logs_title = if let Some(ref service_name) = app.last_selected_service {
+        let mut logs_title = if app.system_logs_mode {
+            "System Logs".to_string()
+        } else if let Some(ref service_name) = app.last_selected_service {
             format!("Logs: {}", service_name)
         } else {
             "Logs".to_string()
@@ -312,13 +354,48 @@ pub fn render(frame: &mut Frame, app: &mut App, live_indicator_on: bool) {
             app.logs_scroll = app.logs_scroll.min(bottom_scroll);
         }
 
+        // Auto-scroll to keep selected entry visible
+        if let Some(sel) = app.log_selected_entry {
+            if sel < app.logs_scroll {
+                app.logs_scroll = sel;
+            } else {
+                // Count visual lines from logs_scroll to see if sel is beyond viewport
+                let mut visual_lines = 0;
+                for i in app.logs_scroll..=sel {
+                    if let Some(&h) = app.cached_entry_heights.get(i) {
+                        visual_lines += h;
+                    }
+                }
+                if visual_lines > visible_lines {
+                    // Scroll forward so sel is the last visible entry
+                    let mut lines_needed = 0;
+                    let mut new_scroll = sel;
+                    for i in (0..=sel).rev() {
+                        if let Some(&h) = app.cached_entry_heights.get(i) {
+                            lines_needed += h;
+                            if lines_needed > visible_lines {
+                                new_scroll = i + 1;
+                                break;
+                            }
+                            new_scroll = i;
+                        }
+                    }
+                    app.logs_scroll = new_scroll.min(sel);
+                }
+            }
+        }
+
         // Track the last seen invocation ID to detect service restarts across None gaps
-        let mut last_invocation_id: Option<&str> = app
-            .logs
-            .iter()
-            .take(app.logs_scroll)
-            .rev()
-            .find_map(|e| e.invocation_id.as_deref());
+        // (only meaningful for per-service logs; skip in system-wide mode)
+        let mut last_invocation_id: Option<&str> = if app.system_logs_mode {
+            None
+        } else {
+            app.logs
+                .iter()
+                .take(app.logs_scroll)
+                .rev()
+                .find_map(|e| e.invocation_id.as_deref())
+        };
 
         // Create log content with scroll, search highlighting, and boot separators
         let mut log_lines: Vec<Line> = Vec::new();
@@ -329,8 +406,9 @@ pub fn render(frame: &mut Frame, app: &mut App, live_indicator_on: bool) {
             }
             if entry_idx > 0 {
                 let prev = &app.logs[entry_idx - 1];
+                let check_invocation = !app.system_logs_mode;
                 let (boot_changed, invocation_changed) =
-                    log_boundary_before_entry(prev, entry, last_invocation_id);
+                    log_boundary_before_entry(prev, entry, if check_invocation { last_invocation_id } else { None });
 
                 // Boot boundary separator
                 if boot_changed {
@@ -383,10 +461,30 @@ pub fn render(frame: &mut Frame, app: &mut App, live_indicator_on: bool) {
                     }
                 }
             }
-            if let Some(id) = entry.invocation_id.as_deref() {
-                last_invocation_id = Some(id);
+            if !app.system_logs_mode
+                && let Some(id) = entry.invocation_id.as_deref() {
+                    last_invocation_id = Some(id);
             }
-            log_lines.push(render_log_entry(entry, entry_idx, app));
+            let mut line = render_log_entry(entry, entry_idx, app);
+            if app.log_selected_entry == Some(entry_idx) {
+                // Apply selection highlight: DarkGray bg, brighten dim fg spans
+                line = Line::from(
+                    line.spans
+                        .into_iter()
+                        .map(|span| {
+                            let mut style = span.style.bg(Color::DarkGray);
+                            // Brighten DarkGray/muted foreground so it's readable on DarkGray bg
+                            if span.style.fg == Some(Color::DarkGray)
+                                || span.style.fg == Some(COLOR_MUTED)
+                            {
+                                style = style.fg(Color::Gray);
+                            }
+                            Span::styled(span.content, style)
+                        })
+                        .collect::<Vec<_>>(),
+                );
+            }
+            log_lines.push(line);
             entries_shown += 1;
         }
 
@@ -521,22 +619,22 @@ pub fn render(frame: &mut Frame, app: &mut App, live_indicator_on: bool) {
         "Type to search logs | Esc/Enter: Exit search | ?: Help & more"
     } else if app.show_logs && !app.log_search_query.is_empty() {
         if app.log_paused {
-            "q/Esc: Back | j/k: Scroll | n/N: Next/Prev match | x: Actions | f: Resume | p: Priority | t: Time | /: Search | ?: Help & more"
+            "q/Esc: Back | j/k: Scroll | n/N: Next/Prev match | x: Actions | f: Resume | L: All logs | p: Priority | t: Time | /: Search | ?: Help & more"
         } else {
-            "q/Esc: Back | j/k: Scroll | n/N: Next/Prev match | x: Actions | f: Pause | p: Priority | t: Time | /: Search | ?: Help & more"
+            "q/Esc: Back | j/k: Scroll | n/N: Next/Prev match | x: Actions | f: Pause | L: All logs | p: Priority | t: Time | /: Search | ?: Help & more"
         }
     } else if app.show_logs {
         if app.log_paused {
-            "q/Esc: Back | j/k: Scroll | g/G: Top/Bottom | x: Actions | f: Resume | /: Search | p: Priority | t: Time | ?: Help & more"
+            "q/Esc: Back | j/k: Scroll | g/G: Top/Bottom | x: Actions | f: Resume | L: All logs | /: Search | p: Priority | t: Time | ?: Help & more"
         } else {
-            "q/Esc: Back | j/k: Scroll | g/G: Top/Bottom | x: Actions | f: Pause | /: Search | p: Priority | t: Time | ?: Help & more"
+            "q/Esc: Back | j/k: Scroll | g/G: Top/Bottom | x: Actions | f: Pause | L: All logs | /: Search | p: Priority | t: Time | ?: Help & more"
         }
     } else if app.search_mode {
         "Type to search | Esc/Enter: Exit search | ?: Help & more"
     } else if !app.search_query.is_empty() || app.status_filter.is_some() || app.file_state_filter.is_some() {
-        "q: Quit | /: Search | s: Status | f: File state | x: Actions | i: Details | t: Type | l: Logs | r: Refresh | u: User/System | Esc: Clear | ?: Help & more"
+        "q: Quit | /: Search | s: Status | f: File state | x: Actions | i: Details | t: Type | l: Logs | L: All logs | r: Refresh | u: User/System | Esc: Clear | ?: Help & more"
     } else {
-        "q/Esc: Quit | /: Search | s: Status | f: File state | x: Actions | i: Details | t: Type | l: Logs | r: Refresh | u: User/System | ?: Help & more"
+        "q/Esc: Quit | /: Search | s: Status | f: File state | x: Actions | i: Details | t: Type | l: Logs | L: All logs | r: Refresh | u: User/System | ?: Help & more"
     };
     let footer = Paragraph::new(footer_text)
         .style(Style::default().fg(Color::DarkGray))
@@ -646,14 +744,16 @@ fn log_entry_visual_heights(app: &App, content_width: usize) -> Vec<usize> {
         let mut entry_lines = wrapped_line_count(&render_log_entry(entry, entry_idx, app), content_width);
         if entry_idx > 0 {
             let prev = &app.logs[entry_idx - 1];
+            let check_invocation = !app.system_logs_mode;
             let (boot_changed, invocation_changed) =
-                log_boundary_before_entry(prev, entry, last_invocation_id);
+                log_boundary_before_entry(prev, entry, if check_invocation { last_invocation_id } else { None });
             if boot_changed || invocation_changed {
                 entry_lines += 1;
             }
         }
-        if let Some(id) = entry.invocation_id.as_deref() {
-            last_invocation_id = Some(id);
+        if !app.system_logs_mode
+            && let Some(id) = entry.invocation_id.as_deref() {
+                last_invocation_id = Some(id);
         }
         heights.push(entry_lines);
     }
@@ -856,6 +956,7 @@ fn render_help(frame: &mut Frame, app: &App) {
             Line::from("  x             Action picker"),
             Line::from("  f             Toggle live tail (auto-refresh)"),
             Line::from("  l             Exit logs"),
+            Line::from("  L             System-wide logs"),
             Line::from("  q / Esc       Clear search / Exit logs"),
             Line::from("  ?             Toggle this help"),
         ]);
@@ -881,6 +982,7 @@ fn render_help(frame: &mut Frame, app: &App) {
             Line::from("  x             Action picker"),
             Line::from("  R             Daemon reload"),
             Line::from("  l             Open logs"),
+            Line::from("  L             System-wide logs"),
             Line::from("  v             View unit file"),
             Line::from(""),
             Line::from(vec![Span::styled("Mouse", section_style)]),
@@ -1800,6 +1902,7 @@ mod tests {
             boot_id: boot_id.map(str::to_string),
             invocation_id: invocation_id.map(str::to_string),
             cursor: None,
+            unit: None,
         }
     }
 

@@ -360,9 +360,21 @@ fn main() -> io::Result<()> {
                     KeyCode::Esc | KeyCode::Char('q') => {
                         if !app.log_search_query.is_empty() {
                             app.clear_log_search();
+                        } else if app.navigated_from_system_logs {
+                            // Return to global system logs
+                            app.navigated_from_system_logs = false;
+                            app.system_logs_mode = true;
+                            app.log_paused = false;
+                            app.log_selected_entry = None;
+                            app.last_selected_service = None;
+                            app.logs.clear();
+                            app.invalidate_log_entry_heights_cache();
+                            app.clear_log_search();
+                            app.log_filters_dirty = true;
                         } else {
                             app.log_paused = false;
                             app.show_logs = false;
+                            app.system_logs_mode = false;
                         }
                     }
                     KeyCode::Char('/') => {
@@ -375,10 +387,23 @@ fn main() -> io::Result<()> {
                         app.prev_log_match(visible_lines);
                     }
                     KeyCode::Char('j') | KeyCode::Down => {
-                        app.scroll_logs_down(1);
+                        if app.log_selected_entry.is_some() {
+                            app.log_select_next();
+                        } else {
+                            app.scroll_logs_down(1);
+                        }
                     }
                     KeyCode::Char('k') | KeyCode::Up => {
-                        app.scroll_logs_up(1);
+                        if app.log_selected_entry.is_some() {
+                            app.log_select_previous();
+                        } else {
+                            app.scroll_logs_up(1);
+                        }
+                    }
+                    KeyCode::Enter => {
+                        if app.log_selected_entry.is_some() && app.system_logs_mode {
+                            app.navigate_to_log_unit();
+                        }
                     }
                     KeyCode::Char('g') | KeyCode::Home => {
                         app.logs_go_to_top();
@@ -407,8 +432,11 @@ fn main() -> io::Result<()> {
                     KeyCode::Char('x') => {
                         app.open_action_picker();
                     }
+                    KeyCode::Char('L') => {
+                        app.toggle_system_logs();
+                    }
                     KeyCode::Char('f') => {
-                        app.toggle_log_paused();
+                        app.toggle_log_paused(visible_lines);
                         if !app.log_paused {
                             app.refresh_logs();
                         }
@@ -424,6 +452,9 @@ fn main() -> io::Result<()> {
                     }
                     KeyCode::Char('l') => {
                         app.toggle_logs();
+                    }
+                    KeyCode::Char('L') => {
+                        app.toggle_system_logs();
                     }
                     KeyCode::Esc => {
                         if !app.search_query.is_empty() {
@@ -533,14 +564,33 @@ fn handle_mouse_event(app: &mut App, mouse: MouseEvent, frame_size: Rect) {
     let regions = ui::get_layout_regions(frame_size, app.show_logs);
 
     if app.show_logs {
-        // Log mode: all scroll events go to logs, clicks are ignored
-        if regions.logs_panel.is_some() {
+        if let Some(logs_panel) = regions.logs_panel {
             match mouse.kind {
                 MouseEventKind::ScrollUp => {
-                    app.scroll_logs_up(3);
+                    if mouse_in_rect(mouse, logs_panel) {
+                        app.scroll_logs_up(3);
+                    }
                 }
                 MouseEventKind::ScrollDown => {
-                    app.scroll_logs_down(3);
+                    if mouse_in_rect(mouse, logs_panel) {
+                        app.scroll_logs_down(3);
+                    }
+                }
+                MouseEventKind::Down(MouseButton::Left) => {
+                    if mouse_in_rect(mouse, logs_panel) {
+                        // +1 for the border top row
+                        let y_in_panel = mouse.row.saturating_sub(logs_panel.y + 1) as usize;
+                        if let Some(entry_idx) = ui::log_entry_at_y(app, y_in_panel) {
+                            if app.log_selected_entry == Some(entry_idx) && app.system_logs_mode {
+                                // Re-click on selected entry → navigate
+                                app.navigate_to_log_unit();
+                            } else {
+                                // First click → pause and highlight
+                                app.log_paused = true;
+                                app.log_selected_entry = Some(entry_idx);
+                            }
+                        }
+                    }
                 }
                 _ => {}
             }
@@ -553,7 +603,12 @@ fn handle_mouse_event(app: &mut App, mouse: MouseEvent, frame_size: Rect) {
                     let y_in_list = mouse.row.saturating_sub(regions.services_list.y + 1);
                     let clicked_index = app.list_state.offset() + y_in_list as usize;
                     if clicked_index < app.filtered_indices.len() {
-                        app.list_state.select(Some(clicked_index));
+                        if app.list_state.selected() == Some(clicked_index) {
+                            // Re-click on selected entry → open details
+                            app.open_details();
+                        } else {
+                            app.list_state.select(Some(clicked_index));
+                        }
                     }
                 }
             }

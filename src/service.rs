@@ -67,6 +67,7 @@ pub struct LogEntry {
     pub boot_id: Option<String>,
     pub invocation_id: Option<String>,
     pub cursor: Option<String>,
+    pub unit: Option<String>,
 }
 
 pub const PRIORITY_LABELS: [&str; 8] = [
@@ -314,15 +315,19 @@ impl SystemdUnit {
 }
 
 pub fn fetch_log_entries(
-    unit_name: &str,
+    unit_name: Option<&str>,
     lines: usize,
     user_mode: bool,
     priority: Option<u8>,
     time_range: TimeRange,
 ) -> Result<Vec<LogEntry>, String> {
-    let unit_flag = if user_mode { "--user-unit" } else { "-u" };
     let lines_str = lines.to_string();
-    let mut args = vec![unit_flag, unit_name, "-n", &lines_str, "--no-pager", "--output=json"];
+    let mut args = vec!["-n", &lines_str, "--no-pager", "--output=json"];
+    if let Some(name) = unit_name {
+        let unit_flag = if user_mode { "--user-unit" } else { "-u" };
+        args.insert(0, name);
+        args.insert(0, unit_flag);
+    }
 
     let priority_str;
     if let Some(p) = priority {
@@ -353,15 +358,19 @@ pub fn fetch_log_entries(
 }
 
 pub fn fetch_log_entries_after_cursor(
-    unit_name: &str,
+    unit_name: Option<&str>,
     cursor: &str,
     user_mode: bool,
     priority: Option<u8>,
     time_range: TimeRange,
 ) -> Result<Vec<LogEntry>, String> {
-    let unit_flag = if user_mode { "--user-unit" } else { "-u" };
     let after_cursor = format!("--after-cursor={}", cursor);
-    let mut args = vec![unit_flag, unit_name, &after_cursor, "--no-pager", "--output=json"];
+    let mut args = vec![&*after_cursor, "--no-pager", "--output=json"];
+    if let Some(name) = unit_name {
+        let unit_flag = if user_mode { "--user-unit" } else { "-u" };
+        args.insert(0, name);
+        args.insert(0, unit_flag);
+    }
 
     let priority_str;
     if let Some(p) = priority {
@@ -402,6 +411,7 @@ fn parse_journal_json_line(line: &str) -> LogEntry {
             boot_id: None,
             invocation_id: None,
             cursor: None,
+            unit: None,
         };
     };
 
@@ -435,6 +445,8 @@ fn parse_journal_json_line(line: &str) -> LogEntry {
 
     let cursor = val["__CURSOR"].as_str().map(|s| s.to_string());
 
+    let unit = val["_SYSTEMD_UNIT"].as_str().map(|s| s.to_string());
+
     LogEntry {
         timestamp,
         priority,
@@ -444,6 +456,7 @@ fn parse_journal_json_line(line: &str) -> LogEntry {
         boot_id,
         invocation_id,
         cursor,
+        unit,
     }
 }
 

@@ -67,7 +67,10 @@ pub struct App {
     pub action_receiver: Option<mpsc::Receiver<Result<String, String>>>,
     pub refresh_receiver: Option<mpsc::Receiver<Vec<SystemdUnit>>>,
     pub status_message: Option<String>,
+    pub system_logs_mode: bool,
+    pub navigated_from_system_logs: bool,
     pub log_paused: bool,
+    pub log_selected_entry: Option<usize>,
     pub logs_at_bottom: bool,
     pub last_refreshed: Option<chrono::DateTime<chrono::Local>>,
     // Unit file viewer
@@ -138,7 +141,10 @@ impl App {
             action_receiver: None,
             refresh_receiver: None,
             status_message: None,
+            system_logs_mode: false,
+            navigated_from_system_logs: false,
             log_paused: false,
+            log_selected_entry: None,
             logs_at_bottom: true,
             last_refreshed: None,
             show_unit_file: false,
@@ -298,6 +304,7 @@ impl App {
             let new_type = UNIT_TYPES[i];
             if new_type != self.unit_type {
                 self.unit_type = new_type;
+                self.system_logs_mode = false;
                 self.status_filter = None;
                 self.file_state_filter = None;
                 self.search_query.clear();
@@ -431,6 +438,44 @@ impl App {
     }
 
     pub fn load_logs_for_selected(&mut self) {
+        if self.system_logs_mode {
+            if !self.log_filters_dirty && !self.logs.is_empty() {
+                return;
+            }
+            self.invalidate_log_entry_heights_cache();
+            self.log_filters_dirty = false;
+            self.logs_scroll = 0;
+            self.clear_log_search();
+            match fetch_log_entries(
+                None,
+                1000,
+                self.user_mode,
+                self.log_priority_filter,
+                self.log_time_range,
+            ) {
+                Ok(logs) => {
+                    self.logs = logs;
+                    if !self.logs.is_empty() {
+                        self.logs_scroll = usize::MAX;
+                    }
+                }
+                Err(e) => {
+                    self.logs = vec![LogEntry {
+                        timestamp: None,
+                        priority: None,
+                        pid: None,
+                        identifier: None,
+                        message: format!("Error fetching logs: {}", e),
+                        boot_id: None,
+                        invocation_id: None,
+                        cursor: None,
+                        unit: None,
+                    }];
+                }
+            }
+            return;
+        }
+
         let current_service = self.selected_unit().map(|s| s.unit.clone());
 
         if current_service != self.last_selected_service || self.log_filters_dirty {
@@ -442,7 +487,7 @@ impl App {
 
             if let Some(unit) = current_service {
                 match fetch_log_entries(
-                    &unit,
+                    Some(&unit),
                     1000,
                     self.user_mode,
                     self.log_priority_filter,
@@ -464,6 +509,7 @@ impl App {
                             boot_id: None,
                             invocation_id: None,
                             cursor: None,
+                            unit: None,
                         }];
                     }
                 }
@@ -495,29 +541,123 @@ impl App {
     pub fn toggle_logs(&mut self) {
         self.show_logs = !self.show_logs;
         self.log_paused = false;
+        self.log_selected_entry = None;
+        self.system_logs_mode = false;
+        self.navigated_from_system_logs = false;
         if !self.show_logs {
             self.last_selected_service = None;
         }
     }
 
-    pub fn toggle_log_paused(&mut self) {
+    pub fn toggle_system_logs(&mut self) {
+        if self.system_logs_mode && self.show_logs {
+            self.system_logs_mode = false;
+            self.navigated_from_system_logs = false;
+            self.show_logs = false;
+            self.log_paused = false;
+            self.log_selected_entry = None;
+            self.last_selected_service = None;
+        } else {
+            self.system_logs_mode = true;
+            self.navigated_from_system_logs = false;
+            self.show_logs = true;
+            self.log_paused = false;
+            self.log_selected_entry = None;
+            self.logs.clear();
+            self.invalidate_log_entry_heights_cache();
+            self.clear_log_search();
+            self.log_filters_dirty = true;
+        }
+    }
+
+    pub fn toggle_log_paused(&mut self, visible_lines: usize) {
         self.log_paused = !self.log_paused;
-        if !self.log_paused {
+        if self.log_paused {
+            if !self.logs.is_empty() {
+                // Resolve a stale logs_scroll (including the usize::MAX "go to bottom"
+                // sentinel) so the walk below starts from a valid index.
+                self.logs_scroll = self.logs_scroll.min(self.logs.len().saturating_sub(1));
+                // Walk entries forward from logs_scroll, accumulating each entry's
+                // visual height (from cached_entry_heights, defaulting to 1). Stop
+                // when the next entry would exceed visible_lines, then select the
+                // last entry that fit — i.e. the bottom-most visible entry. The
+                // `used > 0` guard guarantees at least one entry is always selected,
+                // even if a single entry is taller than the viewport.
+                let mut used = 0;
+                let mut last = self.logs_scroll;
+                for i in self.logs_scroll..self.logs.len() {
+                    let h = self.cached_entry_heights.get(i).copied().unwrap_or(1);
+                    if used + h > visible_lines && used > 0 {
+                        break;
+                    }
+                    last = i;
+                    used += h;
+                }
+                self.log_selected_entry = Some(last);
+            }
+        } else {
+            self.log_selected_entry = None;
             self.logs_go_to_bottom();
         }
     }
 
-    pub fn refresh_logs(&mut self) {
-        let unit = match self.last_selected_service.as_ref() {
-            Some(u) => u.clone(),
+    pub fn log_select_next(&mut self) {
+        if let Some(sel) = self.log_selected_entry {
+            let max = self.logs.len().saturating_sub(1);
+            self.log_selected_entry = Some((sel + 1).min(max));
+        }
+    }
+
+    pub fn log_select_previous(&mut self) {
+        if let Some(sel) = self.log_selected_entry {
+            self.log_selected_entry = Some(sel.saturating_sub(1));
+        }
+    }
+
+    pub fn navigate_to_log_unit(&mut self) {
+        let unit_name = match self
+            .log_selected_entry
+            .and_then(|idx| self.logs.get(idx))
+            .and_then(|e| e.unit.as_ref())
+        {
+            Some(name) => name.clone(),
             None => return,
+        };
+        // Find service in filtered list; bail out if it's excluded by current filters
+        let pos = match self
+            .filtered_indices
+            .iter()
+            .position(|&i| self.services[i].unit == unit_name)
+        {
+            Some(pos) => pos,
+            None => return,
+        };
+        self.list_state.select(Some(pos));
+        // Switch to per-unit log view
+        self.navigated_from_system_logs = true;
+        self.system_logs_mode = false;
+        self.log_selected_entry = None;
+        self.last_selected_service = None;
+        self.log_filters_dirty = true;
+        self.show_logs = true;
+        self.log_paused = false;
+    }
+
+    pub fn refresh_logs(&mut self) {
+        let unit_name = if self.system_logs_mode {
+            None
+        } else {
+            match self.last_selected_service.as_ref() {
+                Some(u) => Some(u.clone()),
+                None => return,
+            }
         };
         let cursor = match self.logs.last().and_then(|e| e.cursor.as_ref()) {
             Some(c) => c.clone(),
             None => return,
         };
         if let Ok(new_entries) = fetch_log_entries_after_cursor(
-            &unit,
+            unit_name.as_deref(),
             &cursor,
             self.user_mode,
             self.log_priority_filter,
@@ -582,6 +722,7 @@ impl App {
         self.log_search_mode = false;
         self.log_search_matches.clear();
         self.log_search_match_index = None;
+        self.log_selected_entry = None;
         self.invalidate_log_entry_heights_cache();
     }
 
@@ -630,6 +771,7 @@ impl App {
 
     pub fn toggle_user_mode(&mut self) {
         self.user_mode = !self.user_mode;
+        self.system_logs_mode = false;
         self.last_selected_service = None;
         self.logs.clear();
         self.invalidate_log_entry_heights_cache();
@@ -988,6 +1130,7 @@ mod tests {
             boot_id: None,
             invocation_id: None,
             cursor: None,
+            unit: None,
         }
     }
 
@@ -1048,7 +1191,10 @@ mod tests {
             action_receiver: None,
             refresh_receiver: None,
             status_message: None,
+            system_logs_mode: false,
+            navigated_from_system_logs: false,
             log_paused: false,
+            log_selected_entry: None,
             logs_at_bottom: true,
             last_refreshed: None,
             show_unit_file: false,
@@ -1766,9 +1912,9 @@ mod tests {
     fn test_toggle_log_paused() {
         let mut app = test_app_with_subs(&["running"]);
         assert!(!app.log_paused);
-        app.toggle_log_paused();
+        app.toggle_log_paused(100);
         assert!(app.log_paused);
-        app.toggle_log_paused();
+        app.toggle_log_paused(100);
         assert!(!app.log_paused);
     }
 
@@ -1779,7 +1925,7 @@ mod tests {
         app.logs_scroll = 1;
         app.log_paused = true;
 
-        app.toggle_log_paused();
+        app.toggle_log_paused(100);
 
         assert!(!app.log_paused);
         assert_eq!(app.logs_scroll, usize::MAX);
@@ -2492,5 +2638,186 @@ mod tests {
         app.next_unit_file_match(5); // visible = 5, match at 15 is out of view
         assert_eq!(app.unit_file_search_match_index, Some(1));
         assert_eq!(app.unit_file_scroll, 15);
+    }
+
+    // System logs mode tests
+
+    #[test]
+    fn test_toggle_system_logs_enters() {
+        let mut app = test_app_with_subs(&["running"]);
+        assert!(!app.system_logs_mode);
+        assert!(!app.show_logs);
+        app.toggle_system_logs();
+        assert!(app.system_logs_mode);
+        assert!(app.show_logs);
+        assert!(!app.log_paused);
+        assert!(app.log_filters_dirty);
+    }
+
+    #[test]
+    fn test_toggle_system_logs_exits() {
+        let mut app = test_app_with_subs(&["running"]);
+        app.system_logs_mode = true;
+        app.show_logs = true;
+        app.toggle_system_logs();
+        assert!(!app.system_logs_mode);
+        assert!(!app.show_logs);
+        assert!(!app.log_paused);
+    }
+
+    #[test]
+    fn test_toggle_logs_clears_system_mode() {
+        let mut app = test_app_with_subs(&["running"]);
+        app.system_logs_mode = true;
+        app.show_logs = true;
+        app.toggle_logs();
+        assert!(!app.system_logs_mode);
+        assert!(!app.show_logs);
+    }
+
+    #[test]
+    fn test_toggle_user_mode_clears_system_logs() {
+        let mut app = test_app_with_subs(&["running"]);
+        app.system_logs_mode = true;
+        app.show_logs = true;
+        app.toggle_user_mode();
+        assert!(!app.system_logs_mode);
+    }
+
+    // Phase — Log selection mode
+
+    #[test]
+    fn test_toggle_log_paused_enters_selection_mode_at_bottom() {
+        let mut app = test_app_with_subs(&["running"]);
+        app.show_logs = true;
+        app.logs = vec![make_log("a"), make_log("b"), make_log("c")];
+        app.cached_entry_heights = vec![1, 1, 1];
+        app.logs_scroll = 0;
+        // Viewport fits 2 lines → last visible entry is index 1
+        app.toggle_log_paused(2);
+        assert!(app.log_paused);
+        assert_eq!(app.log_selected_entry, Some(1));
+    }
+
+    #[test]
+    fn test_toggle_log_paused_enters_selection_mode_all_visible() {
+        let mut app = test_app_with_subs(&["running"]);
+        app.show_logs = true;
+        app.logs = vec![make_log("a"), make_log("b"), make_log("c")];
+        app.cached_entry_heights = vec![1, 1, 1];
+        app.logs_scroll = 0;
+        // Viewport fits all entries → last visible is index 2
+        app.toggle_log_paused(100);
+        assert!(app.log_paused);
+        assert_eq!(app.log_selected_entry, Some(2));
+    }
+
+    #[test]
+    fn test_toggle_log_paused_exits_selection_mode() {
+        let mut app = test_app_with_subs(&["running"]);
+        app.show_logs = true;
+        app.logs = vec![make_log("a"), make_log("b")];
+        app.log_paused = true;
+        app.log_selected_entry = Some(0);
+        app.toggle_log_paused(100);
+        assert!(!app.log_paused);
+        assert_eq!(app.log_selected_entry, None);
+    }
+
+    #[test]
+    fn test_log_select_next() {
+        let mut app = test_app_with_subs(&["running"]);
+        app.logs = vec![make_log("a"), make_log("b"), make_log("c")];
+        app.log_selected_entry = Some(0);
+        app.log_select_next();
+        assert_eq!(app.log_selected_entry, Some(1));
+        app.log_select_next();
+        assert_eq!(app.log_selected_entry, Some(2));
+        // Clamps at max
+        app.log_select_next();
+        assert_eq!(app.log_selected_entry, Some(2));
+    }
+
+    #[test]
+    fn test_log_select_previous() {
+        let mut app = test_app_with_subs(&["running"]);
+        app.logs = vec![make_log("a"), make_log("b"), make_log("c")];
+        app.log_selected_entry = Some(2);
+        app.log_select_previous();
+        assert_eq!(app.log_selected_entry, Some(1));
+        app.log_select_previous();
+        assert_eq!(app.log_selected_entry, Some(0));
+        // Clamps at 0
+        app.log_select_previous();
+        assert_eq!(app.log_selected_entry, Some(0));
+    }
+
+    #[test]
+    fn test_navigate_to_log_unit_found() {
+        let mut app = test_app_with_subs(&["running", "running"]);
+        app.system_logs_mode = true;
+        app.show_logs = true;
+        app.log_paused = true;
+        let mut log = make_log("test message");
+        log.unit = Some("unit1.service".to_string());
+        app.logs = vec![log];
+        app.log_selected_entry = Some(0);
+        app.navigate_to_log_unit();
+        // Should have switched to per-service view
+        assert!(!app.system_logs_mode);
+        assert!(app.show_logs);
+        assert!(!app.log_paused);
+        assert_eq!(app.log_selected_entry, None);
+        // Should have selected the matching service
+        assert_eq!(app.list_state.selected(), Some(1));
+    }
+
+    #[test]
+    fn test_navigate_to_log_unit_no_unit() {
+        let mut app = test_app_with_subs(&["running"]);
+        app.system_logs_mode = true;
+        app.show_logs = true;
+        app.log_paused = true;
+        app.logs = vec![make_log("no unit field")];
+        app.log_selected_entry = Some(0);
+        app.navigate_to_log_unit();
+        // Should be a no-op — still in system logs mode
+        assert!(app.system_logs_mode);
+    }
+
+    #[test]
+    fn test_navigate_to_log_unit_filtered_out() {
+        let mut app = test_app_with_subs(&["running", "exited"]);
+        // Filter to only "running" — unit1.service ("exited") is excluded
+        app.status_filter = Some("running".to_string());
+        app.update_filter();
+        assert_eq!(app.filtered_indices.len(), 1);
+
+        app.system_logs_mode = true;
+        app.show_logs = true;
+        app.log_paused = true;
+        app.list_state.select(Some(0));
+
+        let mut log = make_log("test message");
+        log.unit = Some("unit1.service".to_string()); // excluded by filter
+        app.logs = vec![log];
+        app.log_selected_entry = Some(0);
+
+        app.navigate_to_log_unit();
+        // Should be a no-op — unit is filtered out, stay in system logs mode
+        assert!(app.system_logs_mode);
+        assert_eq!(app.list_state.selected(), Some(0));
+        assert_eq!(app.log_selected_entry, Some(0));
+    }
+
+    #[test]
+    fn test_log_select_noop_when_no_selection() {
+        let mut app = test_app_with_subs(&["running"]);
+        app.logs = vec![make_log("a")];
+        app.log_selected_entry = None;
+        app.log_select_next();
+        assert_eq!(app.log_selected_entry, None);
+        app.log_select_previous();
+        assert_eq!(app.log_selected_entry, None);
     }
 }
