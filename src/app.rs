@@ -565,11 +565,22 @@ impl App {
         }
     }
 
-    pub fn toggle_log_paused(&mut self) {
+    pub fn toggle_log_paused(&mut self, visible_lines: usize) {
         self.log_paused = !self.log_paused;
         if self.log_paused {
             if !self.logs.is_empty() {
-                self.log_selected_entry = Some(self.logs_scroll);
+                // Start selection at the last visible entry (bottom of viewport)
+                let mut used = 0;
+                let mut last = self.logs_scroll;
+                for i in self.logs_scroll..self.logs.len() {
+                    let h = self.cached_entry_heights.get(i).copied().unwrap_or(1);
+                    if used + h > visible_lines && used > 0 {
+                        break;
+                    }
+                    last = i;
+                    used += h;
+                }
+                self.log_selected_entry = Some(last);
             }
         } else {
             self.log_selected_entry = None;
@@ -1884,9 +1895,9 @@ mod tests {
     fn test_toggle_log_paused() {
         let mut app = test_app_with_subs(&["running"]);
         assert!(!app.log_paused);
-        app.toggle_log_paused();
+        app.toggle_log_paused(100);
         assert!(app.log_paused);
-        app.toggle_log_paused();
+        app.toggle_log_paused(100);
         assert!(!app.log_paused);
     }
 
@@ -1897,7 +1908,7 @@ mod tests {
         app.logs_scroll = 1;
         app.log_paused = true;
 
-        app.toggle_log_paused();
+        app.toggle_log_paused(100);
 
         assert!(!app.log_paused);
         assert_eq!(app.logs_scroll, usize::MAX);
@@ -2659,14 +2670,29 @@ mod tests {
     // Phase — Log selection mode
 
     #[test]
-    fn test_toggle_log_paused_enters_selection_mode() {
+    fn test_toggle_log_paused_enters_selection_mode_at_bottom() {
         let mut app = test_app_with_subs(&["running"]);
         app.show_logs = true;
         app.logs = vec![make_log("a"), make_log("b"), make_log("c")];
-        app.logs_scroll = 1;
-        app.toggle_log_paused();
+        app.cached_entry_heights = vec![1, 1, 1];
+        app.logs_scroll = 0;
+        // Viewport fits 2 lines → last visible entry is index 1
+        app.toggle_log_paused(2);
         assert!(app.log_paused);
         assert_eq!(app.log_selected_entry, Some(1));
+    }
+
+    #[test]
+    fn test_toggle_log_paused_enters_selection_mode_all_visible() {
+        let mut app = test_app_with_subs(&["running"]);
+        app.show_logs = true;
+        app.logs = vec![make_log("a"), make_log("b"), make_log("c")];
+        app.cached_entry_heights = vec![1, 1, 1];
+        app.logs_scroll = 0;
+        // Viewport fits all entries → last visible is index 2
+        app.toggle_log_paused(100);
+        assert!(app.log_paused);
+        assert_eq!(app.log_selected_entry, Some(2));
     }
 
     #[test]
@@ -2676,7 +2702,7 @@ mod tests {
         app.logs = vec![make_log("a"), make_log("b")];
         app.log_paused = true;
         app.log_selected_entry = Some(0);
-        app.toggle_log_paused();
+        app.toggle_log_paused(100);
         assert!(!app.log_paused);
         assert_eq!(app.log_selected_entry, None);
     }

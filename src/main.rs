@@ -424,7 +424,7 @@ fn main() -> io::Result<()> {
                         app.toggle_system_logs();
                     }
                     KeyCode::Char('f') => {
-                        app.toggle_log_paused();
+                        app.toggle_log_paused(visible_lines);
                         if !app.log_paused {
                             app.refresh_logs();
                         }
