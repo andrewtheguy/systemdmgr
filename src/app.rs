@@ -67,7 +67,8 @@ pub struct App {
     pub action_receiver: Option<mpsc::Receiver<Result<String, String>>>,
     pub refresh_receiver: Option<mpsc::Receiver<Vec<SystemdUnit>>>,
     pub status_message: Option<String>,
-    pub live_tail: bool,
+    pub log_paused: bool,
+    pub logs_at_bottom: bool,
     pub last_refreshed: Option<chrono::DateTime<chrono::Local>>,
     // Unit file viewer
     pub show_unit_file: bool,
@@ -137,7 +138,8 @@ impl App {
             action_receiver: None,
             refresh_receiver: None,
             status_message: None,
-            live_tail: false,
+            log_paused: false,
+            logs_at_bottom: true,
             last_refreshed: None,
             show_unit_file: false,
             unit_file_content: Vec::new(),
@@ -480,7 +482,6 @@ impl App {
     }
 
     pub fn scroll_logs_up(&mut self, amount: usize) {
-        self.live_tail = false;
         self.logs_scroll = self.logs_scroll.saturating_sub(amount);
     }
 
@@ -493,17 +494,15 @@ impl App {
 
     pub fn toggle_logs(&mut self) {
         self.show_logs = !self.show_logs;
-        if self.show_logs {
-            self.live_tail = true;
-        } else {
-            self.live_tail = false;
+        self.log_paused = false;
+        if !self.show_logs {
             self.last_selected_service = None;
         }
     }
 
-    pub fn toggle_live_tail(&mut self) {
-        self.live_tail = !self.live_tail;
-        if self.live_tail {
+    pub fn toggle_log_paused(&mut self) {
+        self.log_paused = !self.log_paused;
+        if !self.log_paused {
             self.logs_go_to_bottom();
         }
     }
@@ -1049,7 +1048,8 @@ mod tests {
             action_receiver: None,
             refresh_receiver: None,
             status_message: None,
-            live_tail: false,
+            log_paused: false,
+            logs_at_bottom: true,
             last_refreshed: None,
             show_unit_file: false,
             unit_file_content: Vec::new(),
@@ -1743,13 +1743,13 @@ mod tests {
     fn test_toggle_logs() {
         let mut app = test_app_with_subs(&["running"]);
         assert!(!app.show_logs);
-        assert!(!app.live_tail);
+        assert!(!app.log_paused);
         app.toggle_logs();
         assert!(app.show_logs);
-        assert!(app.live_tail);
+        assert!(!app.log_paused);
         app.toggle_logs();
         assert!(!app.show_logs);
-        assert!(!app.live_tail);
+        assert!(!app.log_paused);
     }
 
     #[test]
@@ -1763,35 +1763,36 @@ mod tests {
     }
 
     #[test]
-    fn test_toggle_live_tail() {
+    fn test_toggle_log_paused() {
         let mut app = test_app_with_subs(&["running"]);
-        assert!(!app.live_tail);
-        app.toggle_live_tail();
-        assert!(app.live_tail);
-        app.toggle_live_tail();
-        assert!(!app.live_tail);
+        assert!(!app.log_paused);
+        app.toggle_log_paused();
+        assert!(app.log_paused);
+        app.toggle_log_paused();
+        assert!(!app.log_paused);
     }
 
     #[test]
-    fn test_toggle_live_tail_enabling_goes_to_bottom() {
+    fn test_toggle_log_paused_unpausing_goes_to_bottom() {
         let mut app = test_app_with_subs(&["running"]);
         app.logs = vec![make_log("a"), make_log("b"), make_log("c")];
         app.logs_scroll = 1;
+        app.log_paused = true;
 
-        app.toggle_live_tail();
+        app.toggle_log_paused();
 
-        assert!(app.live_tail);
+        assert!(!app.log_paused);
         assert_eq!(app.logs_scroll, usize::MAX);
     }
 
     #[test]
-    fn test_toggle_logs_disables_live_tail() {
+    fn test_toggle_logs_resets_paused() {
         let mut app = test_app_with_subs(&["running"]);
         app.show_logs = true;
-        app.live_tail = true;
+        app.log_paused = true;
         app.toggle_logs(); // turns off logs
         assert!(!app.show_logs);
-        assert!(!app.live_tail);
+        assert!(!app.log_paused);
     }
 
     // Phase 1 — User mode
@@ -1848,11 +1849,11 @@ mod tests {
     }
 
     #[test]
-    fn test_scroll_logs_up_disables_live_tail() {
+    fn test_scroll_logs_up_does_not_change_paused() {
         let mut app = test_app_with_subs(&["running"]);
-        app.live_tail = true;
+        app.log_paused = false;
         app.scroll_logs_up(1);
-        assert!(!app.live_tail);
+        assert!(!app.log_paused);
     }
 
     #[test]

@@ -50,19 +50,20 @@ fn main() -> io::Result<()> {
     let mut last_live_tail_refresh = Instant::now();
     let mut last_live_indicator_blink = Instant::now();
     let mut live_indicator_on = true;
-    let mut was_live_tail_active = false;
+    let mut was_actively_tailing = false;
 
     loop {
         app.check_action_progress();
-        let live_tail_active = app.live_tail && app.show_logs;
+        let live_mode = !app.log_paused && app.show_logs;
+        let actively_tailing = live_mode && app.logs_at_bottom;
 
-        if live_tail_active && !was_live_tail_active {
+        if actively_tailing && !was_actively_tailing {
             live_indicator_on = true;
             last_live_tail_refresh = Instant::now();
             last_live_indicator_blink = Instant::now();
         }
 
-        if live_tail_active {
+        if actively_tailing {
             while last_live_indicator_blink.elapsed() >= LIVE_TAIL_REFRESH_INTERVAL {
                 live_indicator_on = !live_indicator_on;
                 last_live_indicator_blink += LIVE_TAIL_REFRESH_INTERVAL;
@@ -75,7 +76,7 @@ fn main() -> io::Result<()> {
                 }
             }
         }
-        was_live_tail_active = live_tail_active;
+        was_actively_tailing = actively_tailing;
 
         terminal.draw(|frame| ui::render(frame, &mut app, live_indicator_on))?;
 
@@ -85,7 +86,7 @@ fn main() -> io::Result<()> {
             Duration::from_secs(60)
         };
 
-        if live_tail_active {
+        if actively_tailing {
             let refresh_wait =
                 LIVE_TAIL_REFRESH_INTERVAL.saturating_sub(last_live_tail_refresh.elapsed());
             let blink_wait =
@@ -360,7 +361,7 @@ fn main() -> io::Result<()> {
                         if !app.log_search_query.is_empty() {
                             app.clear_log_search();
                         } else {
-                            app.live_tail = false;
+                            app.log_paused = false;
                             app.show_logs = false;
                         }
                     }
@@ -407,8 +408,8 @@ fn main() -> io::Result<()> {
                         app.open_action_picker();
                     }
                     KeyCode::Char('f') => {
-                        app.toggle_live_tail();
-                        if app.live_tail {
+                        app.toggle_log_paused();
+                        if !app.log_paused {
                             app.refresh_logs();
                         }
                     }

@@ -302,9 +302,12 @@ pub fn render(frame: &mut Frame, app: &mut App, live_indicator_on: bool) {
         let bottom_scroll = bottom_scroll_index(&app.cached_entry_heights, visible_lines);
         if app.logs_scroll == usize::MAX {
             app.logs_scroll = bottom_scroll;
+            app.logs_at_bottom = true;
         } else if app.logs.is_empty() {
             app.logs_scroll = 0;
+            app.logs_at_bottom = true;
         } else {
+            app.logs_at_bottom = app.logs_scroll >= bottom_scroll;
             // Prevent overscrolling into trailing blank space.
             app.logs_scroll = app.logs_scroll.min(bottom_scroll);
         }
@@ -399,11 +402,14 @@ pub fn render(frame: &mut Frame, app: &mut App, live_indicator_on: bool) {
         };
 
         let mut title_spans = vec![Span::raw(logs_title)];
-        if app.live_tail {
-            let live_style = if live_indicator_on {
+        if !app.log_paused {
+            let live_style = if app.logs_at_bottom && live_indicator_on {
                 Style::default().fg(Color::LightGreen)
-            } else {
+            } else if app.logs_at_bottom {
                 Style::default().fg(Color::DarkGray)
+            } else {
+                // Scrolled up: solid green (no blink)
+                Style::default().fg(Color::LightGreen)
             };
             title_spans.push(Span::raw(" "));
             title_spans.push(Span::styled("[LIVE]", live_style));
@@ -514,9 +520,17 @@ pub fn render(frame: &mut Frame, app: &mut App, live_indicator_on: bool) {
     } else if app.log_search_mode {
         "Type to search logs | Esc/Enter: Exit search | ?: Help & more"
     } else if app.show_logs && !app.log_search_query.is_empty() {
-        "q/Esc: Back | j/k: Scroll | n/N: Next/Prev match | x: Actions | f: Follow | p: Priority | t: Time | /: Search | ?: Help & more"
+        if app.log_paused {
+            "q/Esc: Back | j/k: Scroll | n/N: Next/Prev match | x: Actions | f: Resume | p: Priority | t: Time | /: Search | ?: Help & more"
+        } else {
+            "q/Esc: Back | j/k: Scroll | n/N: Next/Prev match | x: Actions | f: Pause | p: Priority | t: Time | /: Search | ?: Help & more"
+        }
     } else if app.show_logs {
-        "q/Esc: Back | j/k: Scroll | g/G: Top/Bottom | x: Actions | f: Follow | /: Search | p: Priority | t: Time | ?: Help & more"
+        if app.log_paused {
+            "q/Esc: Back | j/k: Scroll | g/G: Top/Bottom | x: Actions | f: Resume | /: Search | p: Priority | t: Time | ?: Help & more"
+        } else {
+            "q/Esc: Back | j/k: Scroll | g/G: Top/Bottom | x: Actions | f: Pause | /: Search | p: Priority | t: Time | ?: Help & more"
+        }
     } else if app.search_mode {
         "Type to search | Esc/Enter: Exit search | ?: Help & more"
     } else if !app.search_query.is_empty() || app.status_filter.is_some() || app.file_state_filter.is_some() {
