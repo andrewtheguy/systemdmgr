@@ -494,10 +494,8 @@ impl App {
 
     pub fn toggle_logs(&mut self) {
         self.show_logs = !self.show_logs;
-        if self.show_logs {
-            self.log_paused = false;
-        } else {
-            self.log_paused = false;
+        self.log_paused = false;
+        if !self.show_logs {
             self.last_selected_service = None;
         }
     }
