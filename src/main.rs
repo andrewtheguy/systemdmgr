@@ -565,13 +565,18 @@ fn handle_mouse_event(app: &mut App, mouse: MouseEvent, frame_size: Rect) {
                     }
                 }
                 MouseEventKind::Down(MouseButton::Left) => {
-                    if app.system_logs_mode && mouse_in_rect(mouse, logs_panel) {
+                    if mouse_in_rect(mouse, logs_panel) {
                         // +1 for the border top row
                         let y_in_panel = mouse.row.saturating_sub(logs_panel.y + 1) as usize;
                         if let Some(entry_idx) = ui::log_entry_at_y(app, y_in_panel) {
-                            app.log_selected_entry = Some(entry_idx);
-                            app.log_paused = true;
-                            app.navigate_to_log_unit();
+                            if app.log_selected_entry == Some(entry_idx) && app.system_logs_mode {
+                                // Re-click on selected entry → navigate
+                                app.navigate_to_log_unit();
+                            } else {
+                                // First click → pause and highlight
+                                app.log_paused = true;
+                                app.log_selected_entry = Some(entry_idx);
+                            }
                         }
                     }
                 }
