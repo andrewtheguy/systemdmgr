@@ -1730,21 +1730,30 @@ fn render_details_modal(frame: &mut Frame, app: &mut App) {
                     Span::styled(props.next_elapse_realtime.clone(), value_style),
                 ]));
             }
-            if !props.last_trigger_usec.is_empty() && props.last_trigger_usec != "n/a" {
+            let never_triggered =
+                props.last_trigger_usec.is_empty() || props.last_trigger_usec == "n/a";
+            if never_triggered {
+                lines.push(Line::from(vec![
+                    Span::styled("  Last Trigger:   ", label_style),
+                    Span::styled("never", Style::default().fg(Color::DarkGray)),
+                ]));
+            } else {
                 lines.push(Line::from(vec![
                     Span::styled("  Last Trigger:   ", label_style),
                     Span::styled(props.last_trigger_usec.clone(), value_style),
                 ]));
             }
             if !props.result.is_empty() {
-                let result_color = if props.result == "success" {
-                    Color::Green
+                let (result_text, result_color) = if never_triggered {
+                    ("n/a".to_string(), Color::DarkGray)
+                } else if props.result == "success" {
+                    (props.result.clone(), Color::Green)
                 } else {
-                    Color::Red
+                    (props.result.clone(), Color::Red)
                 };
                 lines.push(Line::from(vec![
                     Span::styled("  Result:         ", label_style),
-                    Span::styled(props.result.clone(), Style::default().fg(result_color)),
+                    Span::styled(result_text, Style::default().fg(result_color)),
                 ]));
             }
             if props.persistent == "yes" {
