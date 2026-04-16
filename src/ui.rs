@@ -22,6 +22,7 @@ fn get_current_username() -> &'static str {
             .or_else(|_| std::env::var("LOGNAME"))
             .unwrap_or_else(|_| {
                 std::process::Command::new("whoami")
+                    .stdin(std::process::Stdio::null())
                     .output()
                     .ok()
                     .and_then(|o| String::from_utf8(o.stdout).ok())

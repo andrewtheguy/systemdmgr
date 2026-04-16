@@ -5,8 +5,24 @@ use ratatui::style::Color;
 pub const COLOR_MUTED: Color = Color::Rgb(100, 100, 100);
 use serde::Deserialize;
 use std::collections::HashMap;
-use std::process::Command;
+use std::process::{Command, Stdio};
 use std::time::{SystemTime, UNIX_EPOCH};
+
+fn non_interactive_command(program: &str) -> Command {
+    let mut cmd = Command::new(program);
+    cmd.stdin(Stdio::null());
+    cmd
+}
+
+fn systemctl_command() -> Command {
+    let mut cmd = non_interactive_command("systemctl");
+    cmd.arg("--no-ask-password");
+    cmd
+}
+
+fn journalctl_command() -> Command {
+    non_interactive_command("journalctl")
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum UnitType {
@@ -243,7 +259,7 @@ pub fn execute_unit_action(action: UnitAction, unit_name: &str, user_mode: bool)
         args.push(unit_name);
     }
 
-    let output = Command::new("systemctl")
+    let output = systemctl_command()
         .args(&args)
         .output()
         .map_err(|e| format!("Failed to execute systemctl: {}", e))?;
@@ -343,7 +359,7 @@ pub fn fetch_log_entries(
         args.push(&since_value);
     }
 
-    let output = Command::new("journalctl")
+    let output = journalctl_command()
         .args(&args)
         .output()
         .map_err(|e| format!("Failed to execute journalctl: {}", e))?;
@@ -386,7 +402,7 @@ pub fn fetch_log_entries_after_cursor(
         args.push(&since_value);
     }
 
-    let output = Command::new("journalctl")
+    let output = journalctl_command()
         .args(&args)
         .output()
         .map_err(|e| format!("Failed to execute journalctl: {}", e))?;
@@ -476,7 +492,7 @@ pub fn fetch_units(unit_type: UnitType, user_mode: bool) -> Result<Vec<SystemdUn
     }
     let type_arg = format!("--type={}", unit_type.systemctl_type());
     args.extend(["list-units", &type_arg, "--all", "--no-pager", "--output=json"]);
-    let output = Command::new("systemctl")
+    let output = systemctl_command()
         .args(&args)
         .output()
         .map_err(|e| format!("Failed to execute systemctl: {}", e))?;
@@ -515,7 +531,7 @@ fn merge_timer_details(units: &mut [SystemdUnit], user_mode: bool) {
     }
     args.extend(["list-timers", "--all", "--no-pager", "--output=json"]);
 
-    let Ok(output) = Command::new("systemctl").args(&args).output() else {
+    let Ok(output) = systemctl_command().args(&args).output() else {
         return;
     };
     if !output.status.success() {
@@ -580,7 +596,7 @@ fn merge_socket_details(units: &mut [SystemdUnit], user_mode: bool) {
     }
     args.extend(["list-sockets", "--all", "--no-pager", "--output=json"]);
 
-    let Ok(output) = Command::new("systemctl").args(&args).output() else {
+    let Ok(output) = systemctl_command().args(&args).output() else {
         return;
     };
     if !output.status.success() {
@@ -614,7 +630,7 @@ fn fetch_unit_file_states(unit_type: UnitType, user_mode: bool) -> HashMap<Strin
     let type_arg = format!("--type={}", unit_type.systemctl_type());
     args.extend(["list-unit-files", &type_arg, "--no-pager", "--output=json"]);
 
-    let Ok(output) = Command::new("systemctl").args(&args).output() else {
+    let Ok(output) = systemctl_command().args(&args).output() else {
         return HashMap::new();
     };
     if !output.status.success() {
@@ -677,7 +693,7 @@ pub fn fetch_unit_properties(unit_name: &str, user_mode: bool) -> UnitProperties
     }
     args.extend(["show", unit_name, "--no-pager"]);
 
-    let Ok(output) = Command::new("systemctl").args(&args).output() else {
+    let Ok(output) = systemctl_command().args(&args).output() else {
         return UnitProperties::default();
     };
     if !output.status.success() {
@@ -757,7 +773,7 @@ pub fn fetch_unit_file_content(unit: &str, user_mode: bool) -> Result<Vec<String
         args.push("--user");
     }
     args.extend(["cat", unit, "--no-pager"]);
-    let mut cmd = Command::new("systemctl");
+    let mut cmd = systemctl_command();
     cmd.args(&args);
 
     let output = cmd.output().map_err(|e| format!("Failed to run systemctl cat: {}", e))?;
