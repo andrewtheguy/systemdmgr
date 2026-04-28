@@ -110,9 +110,23 @@ fn main() -> io::Result<()> {
                 continue;
             }
 
-            // Close help with Esc or any key if help is shown
+            // Help overlay: scroll with j/k/arrows/PgUp/PgDn/g/G; close with Esc/q
             if app.show_help {
-                app.show_help = false;
+                let viewport = app.help_viewport_lines.max(1);
+                match key.code {
+                    KeyCode::Esc | KeyCode::Char('q') | KeyCode::Enter => {
+                        app.show_help = false;
+                    }
+                    KeyCode::Down | KeyCode::Char('j') => app.help_scroll_down(1),
+                    KeyCode::Up | KeyCode::Char('k') => app.help_scroll_up(1),
+                    KeyCode::PageDown | KeyCode::Char(' ') => {
+                        app.help_scroll_down(viewport)
+                    }
+                    KeyCode::PageUp => app.help_scroll_up(viewport),
+                    KeyCode::Home | KeyCode::Char('g') => app.help_scroll_to_top(),
+                    KeyCode::End | KeyCode::Char('G') => app.help_scroll_to_bottom(),
+                    _ => {}
+                }
                 continue;
             }
 
