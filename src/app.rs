@@ -27,6 +27,9 @@ pub struct App {
     pub status_filter: Option<String>,
     pub show_logs: bool,
     pub show_help: bool,
+    pub help_scroll: u16,
+    pub help_content_lines: u16,
+    pub help_viewport_lines: u16,
     pub show_status_picker: bool,
     pub status_picker_state: ListState,
     pub log_search_query: String,
@@ -104,6 +107,9 @@ impl App {
             status_filter: None,
             show_logs: false,
             show_help: false,
+            help_scroll: 0,
+            help_content_lines: 0,
+            help_viewport_lines: 0,
             show_status_picker: false,
             status_picker_state: ListState::default(),
             log_search_query: String::new(),
@@ -673,6 +679,29 @@ impl App {
 
     pub fn toggle_help(&mut self) {
         self.show_help = !self.show_help;
+        self.help_scroll = 0;
+    }
+
+    fn help_max_scroll(&self) -> u16 {
+        self.help_content_lines
+            .saturating_sub(self.help_viewport_lines)
+    }
+
+    pub fn help_scroll_down(&mut self, amount: u16) {
+        let max = self.help_max_scroll();
+        self.help_scroll = self.help_scroll.saturating_add(amount).min(max);
+    }
+
+    pub fn help_scroll_up(&mut self, amount: u16) {
+        self.help_scroll = self.help_scroll.saturating_sub(amount);
+    }
+
+    pub fn help_scroll_to_top(&mut self) {
+        self.help_scroll = 0;
+    }
+
+    pub fn help_scroll_to_bottom(&mut self) {
+        self.help_scroll = self.help_max_scroll();
     }
 
     pub fn page_up(&mut self, page_size: usize) {
@@ -1154,6 +1183,9 @@ mod tests {
             status_filter: None,
             show_logs: false,
             show_help: false,
+            help_scroll: 0,
+            help_content_lines: 0,
+            help_viewport_lines: 0,
             show_status_picker: false,
             status_picker_state: ListState::default(),
             log_search_query: String::new(),
@@ -1906,6 +1938,43 @@ mod tests {
         assert!(app.show_help);
         app.toggle_help();
         assert!(!app.show_help);
+    }
+
+    #[test]
+    fn test_help_scroll_clamps_to_max_and_resets_on_toggle() {
+        let mut app = test_app_with_subs(&["running"]);
+        app.help_content_lines = 30;
+        app.help_viewport_lines = 10;
+
+        app.help_scroll_down(5);
+        assert_eq!(app.help_scroll, 5);
+
+        app.help_scroll_down(100);
+        assert_eq!(app.help_scroll, 20, "scroll should clamp to content - viewport");
+
+        app.help_scroll_up(3);
+        assert_eq!(app.help_scroll, 17);
+
+        app.help_scroll_to_top();
+        assert_eq!(app.help_scroll, 0);
+
+        app.help_scroll_to_bottom();
+        assert_eq!(app.help_scroll, 20);
+
+        app.toggle_help();
+        assert_eq!(app.help_scroll, 0, "toggling help resets scroll");
+    }
+
+    #[test]
+    fn test_help_scroll_no_op_when_content_fits() {
+        let mut app = test_app_with_subs(&["running"]);
+        app.help_content_lines = 5;
+        app.help_viewport_lines = 20;
+
+        app.help_scroll_down(10);
+        assert_eq!(app.help_scroll, 0);
+        app.help_scroll_to_bottom();
+        assert_eq!(app.help_scroll, 0);
     }
 
     #[test]

@@ -653,7 +653,7 @@ pub fn render(frame: &mut Frame, app: &mut App, live_indicator_on: bool) {
     let content_width = chunks[2].width.saturating_sub(2) as usize; // subtract borders
 
     let (segments, suffix): (&[&str], &str) = if app.show_help {
-        (&[], "Press any key to close")
+        (&["j/k: Scroll", "g/G: Top/Bottom", "PgUp/PgDn: Page"], "Esc/q: Close")
     } else if app.show_confirm && app.action_in_progress {
         (&[], "Executing...")
     } else if app.show_confirm && app.action_result.is_some() {
@@ -942,7 +942,7 @@ fn highlight_search_in_message<'a>(
     find_and_highlight_matches(message, &query_lower, base_style, highlight_style)
 }
 
-fn render_help(frame: &mut Frame, app: &App) {
+fn render_help(frame: &mut Frame, app: &mut App) {
     let section_style = Style::default()
         .fg(Color::Yellow)
         .add_modifier(Modifier::BOLD);
@@ -1065,12 +1065,34 @@ fn render_help(frame: &mut Frame, app: &App) {
 
     let area = centered_rect(50, 70, frame.area());
 
+    let content_lines = help_text.len() as u16;
+    let viewport_lines = area.height.saturating_sub(2); // subtract borders
+    app.help_content_lines = content_lines;
+    app.help_viewport_lines = viewport_lines;
+    let max_scroll = content_lines.saturating_sub(viewport_lines);
+    if app.help_scroll > max_scroll {
+        app.help_scroll = max_scroll;
+    }
+
+    let scrollable = content_lines > viewport_lines;
+    let display_title: String = if scrollable {
+        format!(
+            "{} ({}/{})",
+            title,
+            app.help_scroll.saturating_add(1).min(max_scroll + 1),
+            max_scroll + 1,
+        )
+    } else {
+        title.to_string()
+    };
+
     let help = Paragraph::new(help_text)
         .style(Style::default().fg(Color::White))
+        .scroll((app.help_scroll, 0))
         .block(
             Block::default()
                 .borders(Borders::ALL)
-                .title(title)
+                .title(display_title)
                 .style(Style::default().bg(Color::Black)),
         );
 
