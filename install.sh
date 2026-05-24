@@ -1,6 +1,6 @@
 #!/bin/bash
 
-# systemdmgr installer for Linux
+# systemdmgr installer for Linux and macOS
 # Downloads latest binary from: https://github.com/andrewtheguy/systemdmgr/releases
 #
 # Usage: ./install.sh [RELEASE_TAG] [--prerelease]
@@ -114,8 +114,10 @@ compute_checksum() {
 
     if command -v sha256sum >/dev/null 2>&1; then
         sha256sum "$file" | cut -d' ' -f1
+    elif command -v shasum >/dev/null 2>&1; then
+        shasum -a 256 "$file" | cut -d' ' -f1
     else
-        print_error "sha256sum not available"
+        print_error "sha256sum/shasum not available"
         return 1
     fi
 }
@@ -188,9 +190,11 @@ detect_os() {
         Linux*)
             OS="linux"
             ;;
+        Darwin*)
+            OS="darwin"
+            ;;
         *)
             print_error "Unsupported operating system: $(uname -s)"
-            print_error "systemdmgr only supports Linux (it's a systemd viewer)"
             exit 1
             ;;
     esac
@@ -269,7 +273,19 @@ download_and_install() {
     local temp_dir
     temp_dir=$(mktemp -d)
     local temp_binary="${temp_dir}/${BINARY_NAME}"
-    local install_dir="/usr/local/bin"
+    local install_dir
+    local needs_sudo=false
+
+    if [ "$OS" = "darwin" ]; then
+        install_dir="${HOME}/.local/bin"
+        mkdir -p "$install_dir"
+    else
+        install_dir="/usr/local/bin"
+        if [ "$(id -u)" -ne 0 ]; then
+            needs_sudo=true
+        fi
+    fi
+
     local final_path="${install_dir}/systemdmgr"
 
     trap 'rm -rf "$temp_dir"' EXIT
@@ -277,15 +293,28 @@ download_and_install() {
     download_binary "$temp_binary"
     chmod +x "$temp_binary"
 
-    # Move the binary to final location (requires sudo)
-    if ! sudo mv "$temp_binary" "$final_path"; then
-        print_error "Failed to install binary to ${final_path}"
-        exit 1
+    if [ "$needs_sudo" = true ]; then
+        if ! sudo mv "$temp_binary" "$final_path"; then
+            print_error "Failed to install binary to ${final_path}"
+            exit 1
+        fi
+    else
+        if ! mv "$temp_binary" "$final_path"; then
+            print_error "Failed to install binary to ${final_path}"
+            exit 1
+        fi
     fi
 
     rm -rf "$temp_dir"
 
     print_info "Binary installed successfully to ${final_path}"
+
+    if [ "$OS" = "darwin" ]; then
+        case ":$PATH:" in
+            *":${install_dir}:"*) ;;
+            *) print_warn "Make sure ${install_dir} is in your PATH" ;;
+        esac
+    fi
 }
 
 # Display usage information
@@ -308,7 +337,11 @@ show_usage() {
     echo "  $0 --prerelease                 # Install latest prerelease"
     echo "  $0 --download-only              # Download latest to current directory"
     echo ""
-    echo "Supported platforms: Linux (amd64, arm64)"
+    echo "Supported platforms: Linux (amd64, arm64), macOS (amd64, arm64)"
+    echo ""
+    echo "Install locations:"
+    echo "  Linux:  /usr/local/bin (requires sudo)"
+    echo "  macOS:  ~/.local/bin (no sudo required)"
 }
 
 # Main installation function
@@ -321,7 +354,6 @@ install() {
     print_info "Release: ${RELEASE_TAG}"
     print_info "Repository: ${REPO_OWNER}/${REPO_NAME}"
 
-    detect_os
     detect_arch
     get_binary_name
 
@@ -352,17 +384,20 @@ install() {
     fi
 }
 
-# Check if sudo is available for installation
+# Check if sudo is available for installation (Linux only)
 check_privileges() {
-    if ! command -v sudo >/dev/null 2>&1 && [ "$EUID" -ne 0 ]; then
-        print_error "sudo is required to install to /usr/local/bin. Please install sudo or run as root."
-        exit 1
+    if [ "$OS" = "linux" ] && [ "$(id -u)" -ne 0 ]; then
+        if ! command -v sudo >/dev/null 2>&1; then
+            print_error "sudo is required to install to /usr/local/bin. Please install sudo or run as root."
+            exit 1
+        fi
     fi
 }
 
 # Main execution
 main() {
     parse_args "$@"
+    detect_os
 
     if [ "$DOWNLOAD_ONLY" = true ]; then
         print_info "Starting systemdmgr download..."

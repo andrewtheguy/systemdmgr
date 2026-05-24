@@ -22,16 +22,32 @@ A terminal UI for managing and browsing systemd units.
 
 ## Installation
 
-### Quick Install
+### Quick Install (Linux)
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/andrewtheguy/systemdmgr/main/install.sh | sudo bash
+curl -fsSL https://raw.githubusercontent.com/andrewtheguy/systemdmgr/main/install.sh | bash
 ```
 
 To install a prerelease version:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/andrewtheguy/systemdmgr/main/install.sh | sudo bash -s -- --prerelease
+curl -fsSL https://raw.githubusercontent.com/andrewtheguy/systemdmgr/main/install.sh | bash -s -- --prerelease
+```
+
+On Linux the installer uses sudo to place the binary in `/usr/local/bin`.
+
+### macOS (SSH remote management only)
+
+macOS does not have systemd, but you can use systemdmgr as an SSH client to manage remote Linux servers:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/andrewtheguy/systemdmgr/main/install.sh | bash
+```
+
+The binary is installed to `~/.local/bin` (no sudo required). Then connect to a remote host:
+
+```bash
+systemdmgr --ssh user@server
 ```
 
 ### From Source
@@ -120,7 +136,8 @@ Press `?` in the app to see context-sensitive help.
 ## Requirements
 
 - Rust 1.85+ (2024 edition)
-- systemd 246+ with `systemctl` on `PATH` (local host, or remote host when using `--ssh`)
+- **Linux:** systemd 246+ with `systemctl` on `PATH` (local host, or remote host when using `--ssh`)
+- **macOS:** SSH remote management only (`--ssh` flag required; the remote host must have systemd)
 - OpenSSL/libssl (for remote management via `--ssh`)
 
 ## License
