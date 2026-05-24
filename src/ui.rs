@@ -167,6 +167,8 @@ pub fn render(frame: &mut Frame, app: &mut App, live_indicator_on: bool) {
     };
 
     // Header / Search bar
+    let host_suffix = app.host_label().map_or(String::new(), |h| format!(" on {h}"));
+
     let header = if app.unit_file_search_mode {
         let match_info = if app.unit_file_search_matches.is_empty() {
             if app.unit_file_search_query.is_empty() {
@@ -223,7 +225,7 @@ pub fn render(frame: &mut Frame, app: &mut App, live_indicator_on: bool) {
             .block(Block::default().borders(Borders::ALL))
     } else if app.search_mode {
         let scope_label = if app.user_mode { "User" } else { "System" };
-        let title = format!("{} [{}] Search", app.unit_type.label(), scope_label);
+        let title = format!("{} [{}]{host_suffix} Search", app.unit_type.label(), scope_label);
         let search_text = format!("/{}_", app.search_query);
         Paragraph::new(search_text)
             .style(Style::default().fg(Color::Yellow))
@@ -240,7 +242,7 @@ pub fn render(frame: &mut Frame, app: &mut App, live_indicator_on: bool) {
             info_parts.push(format!("File state: {}", fs));
         }
         let scope_label = if app.user_mode { "User" } else { "System" };
-        let prefix = format!("{} [{}]", app.unit_type.label(), scope_label);
+        let prefix = format!("{} [{}]{host_suffix}", app.unit_type.label(), scope_label);
         let info = format!("{} | {} ({} matches)", prefix, info_parts.join(" | "), app.filtered_indices.len());
         Paragraph::new(info)
             .style(Style::default().fg(Color::Green))
@@ -250,13 +252,13 @@ pub fn render(frame: &mut Frame, app: &mut App, live_indicator_on: bool) {
             .style(Style::default().fg(Color::Green).add_modifier(Modifier::BOLD))
             .block(Block::default().borders(Borders::ALL))
     } else if app.system_logs_mode {
-        Paragraph::new("SystemD Logs")
+        Paragraph::new(format!("SystemD Logs{host_suffix}"))
             .style(Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD))
             .block(Block::default().borders(Borders::ALL))
     } else {
         let scope_label = if app.user_mode { "User" } else { "System" };
         let username = get_current_username();
-        let title = format!("SystemD {} [{}] (user:{})", app.unit_type.label(), scope_label, username);
+        let title = format!("SystemD {} [{}]{host_suffix} (user:{username})", app.unit_type.label(), scope_label);
         let refreshed = app
             .last_refreshed
             .map(|t| format!("  (loaded {})", t.format("%b %d %H:%M:%S %Z")))
