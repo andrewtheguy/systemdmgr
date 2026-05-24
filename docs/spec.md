@@ -22,6 +22,16 @@ src/
 
 **Data flow:** `systemctl`/`journalctl` CLI → JSON parsing → `App` state → ratatui rendering
 
+### Remote Management (SSH)
+
+- Enabled via `--ssh user@server` CLI flag
+- Uses OpenSSH ControlMaster for connection multiplexing — authenticates once interactively before TUI starts, reuses the persistent connection for all subsequent commands
+- All `systemctl`/`journalctl` commands are transparently wrapped as `ssh -o ControlPath=<sock> <host> <program> [args...]`
+- Both system and user (`--user`) mode supported over SSH
+- Header displays remote host (e.g., `"SystemD Services [System] on user@server"`)
+- Connection cleanup via `Drop` on normal exit and panic hook on crashes
+- No additional dependencies — uses the system's `ssh` binary via `std::process::Command`
+
 ## UI Layout
 
 ```
@@ -155,7 +165,7 @@ src/
 ### Unit Details Modal
 
 - Opened with `i` or `Enter`, closed with `Esc`/`i`/`Enter`
-- Scrollable (j/k, g/G, PgUp/PgDn)
+- Scrollable (arrows, g/G, PgUp/PgDn)
 - Scroll position indicator in title: `[1-20/35]`
 - Centered at 70% width, 80% height of terminal
 
@@ -210,8 +220,8 @@ src/
 
 | Key | Action |
 |-----|--------|
-| `j`/`Down` | Move down / scroll |
-| `k`/`Up` | Move up / scroll |
+| `Down` | Move down / scroll |
+| `Up` | Move up / scroll |
 | `g`/`Home` | Go to top |
 | `G`/`End` | Go to bottom |
 | `PgUp`/`PgDn` | Page up/down |
@@ -264,6 +274,8 @@ src/
 | Start / Stop / Restart / Reload | Yes | Yes |
 | Enable / Disable | Yes | Yes |
 | Daemon reload | Yes | Yes |
+| **Remote Management** | | |
+| SSH remote management | No (web-based) | Yes |
 | **Unit Details** | | |
 | Unit file path display | Yes | Yes |
 | Unit dependencies | Yes | Yes |

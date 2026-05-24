@@ -17,8 +17,8 @@ A terminal UI for managing and browsing systemd units.
 - View unit logs in a side panel with search, priority filter, and time range filter
 - Live tail mode for real-time log monitoring
 - Toggle between user and system units
+- Remote management via SSH (authenticate once, persistent connection)
 - Mouse support (click to select, scroll to navigate)
-- Vim-style keyboard navigation
 
 ## Installation
 
@@ -46,7 +46,19 @@ cargo install --path .
 systemdmgr
 ```
 
-Check the installed version:
+### Remote Management
+
+Manage systemd units on a remote server over SSH:
+
+```bash
+systemdmgr --ssh user@server
+```
+
+The SSH connection authenticates once interactively (password, 2FA, agent keys all work) and reuses the connection for all subsequent commands via OpenSSH ControlMaster. The host can be any valid SSH destination, including `~/.ssh/config` aliases.
+
+`--user` mode is supported over SSH (requires `loginctl enable-linger` on the remote).
+
+### Version
 
 ```bash
 systemdmgr version
@@ -60,8 +72,8 @@ Press `?` in the app to see context-sensitive help.
 
 | Key | Action |
 |-----|--------|
-| `j` / `Down` | Move down |
-| `k` / `Up` | Move up |
+| `Down` | Move down |
+| `Up` | Move up |
 | `g` / `Home` | Go to top |
 | `G` / `End` | Go to bottom |
 | `PgUp` / `PgDn` | Page up / down |
@@ -83,8 +95,8 @@ Press `?` in the app to see context-sensitive help.
 
 | Key | Action |
 |-----|--------|
-| `j` / `Down` | Scroll down |
-| `k` / `Up` | Scroll up |
+| `Down` | Scroll down |
+| `Up` | Scroll up |
 | `g` / `Home` | Go to top |
 | `G` / `End` | Go to bottom |
 | `PgUp` / `PgDn` | Page scroll |
@@ -98,10 +110,15 @@ Press `?` in the app to see context-sensitive help.
 | `Esc` | Clear search / exit logs |
 | `?` | Toggle help |
 
+## Documentation
+
+- [Specification](docs/spec.md) — architecture, features, and UI details
+- [Roadmap](docs/roadmap.md) — planned features and future considerations
+
 ## Requirements
 
-- Linux with systemd
 - Rust 1.85+ (2024 edition)
+- Linux with systemd (for local management), or any OS with OpenSSH (for remote management via `--ssh`)
 
 ## License
 

@@ -43,7 +43,7 @@ Action picker modal (`x` key) with confirmation dialog for common systemd operat
 
 **UX flow:**
 - Press `x` on a selected unit → action picker modal shows context-sensitive actions
-- Select action with j/k + Enter → confirmation dialog (Y/N)
+- Select action with arrows + Enter → confirmation dialog (Y/N)
 - On success: auto-refresh unit list, show green status message in header
 - On failure: show error message (e.g., permission denied)
 - `R` shortcut for daemon-reload confirmation directly
@@ -64,11 +64,11 @@ These features are excluded from systemdmgr's scope.
 
 ### Non-Unit-Management Features
 
-- Web-based remote access (Cockpit is a web server; systemdmgr is a local TUI)
+- Web-based remote access (Cockpit is a web server; systemdmgr uses SSH for remote access)
 - Hostname configuration (`hostnamed`)
 - Time/timezone management (`timedated`)
 - NTP server management
-- Multi-host management
+- Multi-host management (single session manages one remote at a time)
 - Certificate management
 - User account management
 

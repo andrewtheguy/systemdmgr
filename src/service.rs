@@ -8,20 +8,100 @@ use std::collections::HashMap;
 use std::process::{Command, Stdio};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-fn non_interactive_command(program: &str) -> Command {
-    let mut cmd = Command::new(program);
-    cmd.stdin(Stdio::null());
-    cmd
+#[derive(Debug, Clone)]
+pub struct SshConfig {
+    pub host: String,
+    pub control_path: String,
 }
 
-fn systemctl_command() -> Command {
-    let mut cmd = non_interactive_command("systemctl");
+pub struct SshConnection {
+    pub config: SshConfig,
+    master_process: std::process::Child,
+}
+
+impl SshConnection {
+    pub fn establish(host: &str) -> Result<Self, String> {
+        let control_path = format!("/tmp/systemdmgr-ssh-{}.sock", std::process::id());
+        let child = Command::new("ssh")
+            .args([
+                "-o", "ControlMaster=yes",
+                "-o", &format!("ControlPath={control_path}"),
+                "-o", "ControlPersist=no",
+                "-o", "ServerAliveInterval=60",
+                "-N",
+                host,
+            ])
+            .spawn()
+            .map_err(|e| format!("Failed to spawn ssh: {e}"))?;
+
+        let start = std::time::Instant::now();
+        let timeout = std::time::Duration::from_secs(60);
+        loop {
+            if std::path::Path::new(&control_path).exists() {
+                break;
+            }
+            if start.elapsed() > timeout {
+                let mut child = child;
+                let _ = child.kill();
+                return Err("SSH connection timed out".to_string());
+            }
+            std::thread::sleep(std::time::Duration::from_millis(100));
+        }
+
+        Ok(SshConnection {
+            config: SshConfig {
+                host: host.to_string(),
+                control_path,
+            },
+            master_process: child,
+        })
+    }
+}
+
+impl Drop for SshConnection {
+    fn drop(&mut self) {
+        let _ = Command::new("ssh")
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .args([
+                "-o", &format!("ControlPath={}", self.config.control_path),
+                "-O", "exit",
+                &self.config.host,
+            ])
+            .output();
+        let _ = self.master_process.kill();
+        let _ = self.master_process.wait();
+        let _ = std::fs::remove_file(&self.config.control_path);
+    }
+}
+
+fn non_interactive_command(program: &str, ssh: Option<&SshConfig>) -> Command {
+    match ssh {
+        None => {
+            let mut cmd = Command::new(program);
+            cmd.stdin(Stdio::null());
+            cmd
+        }
+        Some(config) => {
+            let mut cmd = Command::new("ssh");
+            cmd.stdin(Stdio::null());
+            cmd.args(["-o", &format!("ControlPath={}", config.control_path)]);
+            cmd.arg(&config.host);
+            cmd.arg(program);
+            cmd
+        }
+    }
+}
+
+fn systemctl_command(ssh: Option<&SshConfig>) -> Command {
+    let mut cmd = non_interactive_command("systemctl", ssh);
     cmd.arg("--no-ask-password");
     cmd
 }
 
-fn journalctl_command() -> Command {
-    non_interactive_command("journalctl")
+fn journalctl_command(ssh: Option<&SshConfig>) -> Command {
+    non_interactive_command("journalctl", ssh)
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -249,7 +329,7 @@ impl UnitAction {
     }
 }
 
-pub fn execute_unit_action(action: UnitAction, unit_name: &str, user_mode: bool) -> Result<String, String> {
+pub fn execute_unit_action(action: UnitAction, unit_name: &str, user_mode: bool, ssh: Option<&SshConfig>) -> Result<String, String> {
     let mut args = Vec::new();
     if user_mode {
         args.push("--user");
@@ -259,7 +339,7 @@ pub fn execute_unit_action(action: UnitAction, unit_name: &str, user_mode: bool)
         args.push(unit_name);
     }
 
-    let output = systemctl_command()
+    let output = systemctl_command(ssh)
         .args(&args)
         .output()
         .map_err(|e| format!("Failed to execute systemctl: {}", e))?;
@@ -336,6 +416,7 @@ pub fn fetch_log_entries(
     user_mode: bool,
     priority: Option<u8>,
     time_range: TimeRange,
+    ssh: Option<&SshConfig>,
 ) -> Result<Vec<LogEntry>, String> {
     let lines_str = lines.to_string();
     let mut args = vec!["-n", &lines_str, "--no-pager", "--output=json"];
@@ -359,7 +440,7 @@ pub fn fetch_log_entries(
         args.push(&since_value);
     }
 
-    let output = journalctl_command()
+    let output = journalctl_command(ssh)
         .args(&args)
         .output()
         .map_err(|e| format!("Failed to execute journalctl: {}", e))?;
@@ -379,6 +460,7 @@ pub fn fetch_log_entries_after_cursor(
     user_mode: bool,
     priority: Option<u8>,
     time_range: TimeRange,
+    ssh: Option<&SshConfig>,
 ) -> Result<Vec<LogEntry>, String> {
     let after_cursor = format!("--after-cursor={}", cursor);
     let mut args = vec![&*after_cursor, "--no-pager", "--output=json"];
@@ -402,7 +484,7 @@ pub fn fetch_log_entries_after_cursor(
         args.push(&since_value);
     }
 
-    let output = journalctl_command()
+    let output = journalctl_command(ssh)
         .args(&args)
         .output()
         .map_err(|e| format!("Failed to execute journalctl: {}", e))?;
@@ -485,14 +567,14 @@ pub fn format_log_timestamp(timestamp_us: i64) -> String {
     }
 }
 
-pub fn fetch_units(unit_type: UnitType, user_mode: bool) -> Result<Vec<SystemdUnit>, String> {
+pub fn fetch_units(unit_type: UnitType, user_mode: bool, ssh: Option<&SshConfig>) -> Result<Vec<SystemdUnit>, String> {
     let mut args = Vec::new();
     if user_mode {
         args.push("--user");
     }
     let type_arg = format!("--type={}", unit_type.systemctl_type());
     args.extend(["list-units", &type_arg, "--all", "--no-pager", "--output=json"]);
-    let output = systemctl_command()
+    let output = systemctl_command(ssh)
         .args(&args)
         .output()
         .map_err(|e| format!("Failed to execute systemctl: {}", e))?;
@@ -508,12 +590,12 @@ pub fn fetch_units(unit_type: UnitType, user_mode: bool) -> Result<Vec<SystemdUn
         .map_err(|e| format!("Failed to parse JSON: {}", e))?;
 
     match unit_type {
-        UnitType::Timer => merge_timer_details(&mut units, user_mode),
-        UnitType::Socket => merge_socket_details(&mut units, user_mode),
+        UnitType::Timer => merge_timer_details(&mut units, user_mode, ssh),
+        UnitType::Socket => merge_socket_details(&mut units, user_mode, ssh),
         _ => {}
     }
 
-    merge_file_states(&mut units, unit_type, user_mode);
+    merge_file_states(&mut units, unit_type, user_mode, ssh);
 
     Ok(units)
 }
@@ -524,14 +606,14 @@ struct TimerEntry {
     next: u64,
 }
 
-fn merge_timer_details(units: &mut [SystemdUnit], user_mode: bool) {
+fn merge_timer_details(units: &mut [SystemdUnit], user_mode: bool, ssh: Option<&SshConfig>) {
     let mut args = Vec::new();
     if user_mode {
         args.push("--user");
     }
     args.extend(["list-timers", "--all", "--no-pager", "--output=json"]);
 
-    let Ok(output) = systemctl_command().args(&args).output() else {
+    let Ok(output) = systemctl_command(ssh).args(&args).output() else {
         return;
     };
     if !output.status.success() {
@@ -589,14 +671,14 @@ struct SocketEntry {
     listen: String,
 }
 
-fn merge_socket_details(units: &mut [SystemdUnit], user_mode: bool) {
+fn merge_socket_details(units: &mut [SystemdUnit], user_mode: bool, ssh: Option<&SshConfig>) {
     let mut args = Vec::new();
     if user_mode {
         args.push("--user");
     }
     args.extend(["list-sockets", "--all", "--no-pager", "--output=json"]);
 
-    let Ok(output) = systemctl_command().args(&args).output() else {
+    let Ok(output) = systemctl_command(ssh).args(&args).output() else {
         return;
     };
     if !output.status.success() {
@@ -622,7 +704,7 @@ struct UnitFileEntry {
     state: String,
 }
 
-fn fetch_unit_file_states(unit_type: UnitType, user_mode: bool) -> HashMap<String, String> {
+fn fetch_unit_file_states(unit_type: UnitType, user_mode: bool, ssh: Option<&SshConfig>) -> HashMap<String, String> {
     let mut args = Vec::new();
     if user_mode {
         args.push("--user");
@@ -630,7 +712,7 @@ fn fetch_unit_file_states(unit_type: UnitType, user_mode: bool) -> HashMap<Strin
     let type_arg = format!("--type={}", unit_type.systemctl_type());
     args.extend(["list-unit-files", &type_arg, "--no-pager", "--output=json"]);
 
-    let Ok(output) = systemctl_command().args(&args).output() else {
+    let Ok(output) = systemctl_command(ssh).args(&args).output() else {
         return HashMap::new();
     };
     if !output.status.success() {
@@ -657,8 +739,8 @@ fn fetch_unit_file_states(unit_type: UnitType, user_mode: bool) -> HashMap<Strin
         .collect()
 }
 
-fn merge_file_states(units: &mut [SystemdUnit], unit_type: UnitType, user_mode: bool) {
-    let states = fetch_unit_file_states(unit_type, user_mode);
+fn merge_file_states(units: &mut [SystemdUnit], unit_type: UnitType, user_mode: bool, ssh: Option<&SshConfig>) {
+    let states = fetch_unit_file_states(unit_type, user_mode, ssh);
     for unit in units.iter_mut() {
         if let Some(state) = states.get(&unit.unit) {
             unit.file_state = Some(state.clone());
@@ -686,14 +768,14 @@ fn parse_timer_specs(raw: &str) -> Vec<String> {
         .collect()
 }
 
-pub fn fetch_unit_properties(unit_name: &str, user_mode: bool) -> UnitProperties {
+pub fn fetch_unit_properties(unit_name: &str, user_mode: bool, ssh: Option<&SshConfig>) -> UnitProperties {
     let mut args = Vec::new();
     if user_mode {
         args.push("--user");
     }
     args.extend(["show", unit_name, "--no-pager"]);
 
-    let Ok(output) = systemctl_command().args(&args).output() else {
+    let Ok(output) = systemctl_command(ssh).args(&args).output() else {
         return UnitProperties::default();
     };
     if !output.status.success() {
@@ -767,13 +849,13 @@ pub fn fetch_unit_properties(unit_name: &str, user_mode: bool) -> UnitProperties
     }
 }
 
-pub fn fetch_unit_file_content(unit: &str, user_mode: bool) -> Result<Vec<String>, String> {
+pub fn fetch_unit_file_content(unit: &str, user_mode: bool, ssh: Option<&SshConfig>) -> Result<Vec<String>, String> {
     let mut args = Vec::new();
     if user_mode {
         args.push("--user");
     }
     args.extend(["cat", unit, "--no-pager"]);
-    let mut cmd = systemctl_command();
+    let mut cmd = systemctl_command(ssh);
     cmd.args(&args);
 
     let output = cmd.output().map_err(|e| format!("Failed to run systemctl cat: {}", e))?;

@@ -5,8 +5,8 @@ use ratatui::widgets::ListState;
 
 use crate::service::{
     execute_unit_action, fetch_log_entries, fetch_log_entries_after_cursor,
-    fetch_unit_file_content, fetch_unit_properties, fetch_units, LogEntry, SystemdUnit, TimeRange,
-    UnitAction, UnitProperties, UnitType, FILE_STATE_OPTIONS, TIME_RANGES, UNIT_TYPES,
+    fetch_unit_file_content, fetch_unit_properties, fetch_units, LogEntry, SshConfig, SystemdUnit,
+    TimeRange, UnitAction, UnitProperties, UnitType, FILE_STATE_OPTIONS, TIME_RANGES, UNIT_TYPES,
 };
 
 pub struct App {
@@ -37,6 +37,7 @@ pub struct App {
     pub log_search_matches: Vec<usize>,
     pub log_search_match_index: Option<usize>,
     pub user_mode: bool,
+    pub ssh: Option<SshConfig>,
     pub unit_type: UnitType,
     pub show_type_picker: bool,
     pub type_picker_state: ListState,
@@ -88,7 +89,7 @@ pub struct App {
 }
 
 impl App {
-    pub fn new() -> Self {
+    pub fn new(ssh: Option<SshConfig>) -> Self {
         let mut app = Self {
             services: Vec::new(),
             list_state: ListState::default(),
@@ -117,6 +118,7 @@ impl App {
             log_search_matches: Vec::new(),
             log_search_match_index: None,
             user_mode: false,
+            ssh,
             unit_type: UnitType::Service,
             show_type_picker: false,
             type_picker_state: ListState::default(),
@@ -166,9 +168,17 @@ impl App {
         app
     }
 
+    pub fn ssh(&self) -> Option<&SshConfig> {
+        self.ssh.as_ref()
+    }
+
+    pub fn host_label(&self) -> Option<&str> {
+        self.ssh.as_ref().map(|c| c.host.as_str())
+    }
+
     pub fn load_services(&mut self) {
         self.properties_cache.clear();
-        match fetch_units(self.unit_type, self.user_mode) {
+        match fetch_units(self.unit_type, self.user_mode, self.ssh()) {
             Ok(services) => {
                 self.services = services;
                 self.error = None;
@@ -458,6 +468,7 @@ impl App {
                 self.user_mode,
                 self.log_priority_filter,
                 self.log_time_range,
+                self.ssh(),
             ) {
                 Ok(logs) => {
                     self.logs = logs;
@@ -498,6 +509,7 @@ impl App {
                     self.user_mode,
                     self.log_priority_filter,
                     self.log_time_range,
+                    self.ssh(),
                 ) {
                     Ok(logs) => {
                         self.logs = logs;
@@ -668,6 +680,7 @@ impl App {
             self.user_mode,
             self.log_priority_filter,
             self.log_time_range,
+            self.ssh(),
         )
             && !new_entries.is_empty()
         {
@@ -820,7 +833,7 @@ impl App {
             let props = if let Some(cached) = self.properties_cache.get(&name) {
                 cached.clone()
             } else {
-                let props = fetch_unit_properties(&name, self.user_mode);
+                let props = fetch_unit_properties(&name, self.user_mode, self.ssh());
                 self.properties_cache.insert(name.clone(), props.clone());
                 props
             };
@@ -953,15 +966,16 @@ impl App {
             let unit_name = unit_name.clone();
             let user_mode = self.user_mode;
             let unit_type = self.unit_type;
+            let ssh = self.ssh.clone();
             let (action_tx, action_rx) = mpsc::channel();
             let (refresh_tx, refresh_rx) = mpsc::channel();
             self.action_in_progress = true;
             self.action_receiver = Some(action_rx);
             self.refresh_receiver = Some(refresh_rx);
             std::thread::spawn(move || {
-                let result = execute_unit_action(action, &unit_name, user_mode);
+                let result = execute_unit_action(action, &unit_name, user_mode, ssh.as_ref());
                 let _ = action_tx.send(result);
-                if let Ok(units) = fetch_units(unit_type, user_mode) {
+                if let Ok(units) = fetch_units(unit_type, user_mode, ssh.as_ref()) {
                     let _ = refresh_tx.send(units);
                 }
             });
@@ -1019,7 +1033,7 @@ impl App {
     pub fn open_unit_file(&mut self) {
         if let Some(unit) = self.selected_unit() {
             let name = unit.unit.clone();
-            match fetch_unit_file_content(&name, self.user_mode) {
+            match fetch_unit_file_content(&name, self.user_mode, self.ssh()) {
                 Ok(lines) => {
                     self.unit_file_content = lines;
                 }
@@ -1193,6 +1207,7 @@ mod tests {
             log_search_matches: Vec::new(),
             log_search_match_index: None,
             user_mode: false,
+            ssh: None,
             unit_type: UnitType::Service,
             show_type_picker: false,
             type_picker_state: ListState::default(),

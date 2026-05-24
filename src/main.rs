@@ -16,28 +16,66 @@ use crossterm::{
 use ratatui::{prelude::*, Terminal};
 
 use app::App;
+use service::SshConnection;
 
 const LIVE_TAIL_REFRESH_INTERVAL: Duration = Duration::from_millis(500);
 
 fn main() -> io::Result<()> {
     let args: Vec<String> = std::env::args().collect();
-    if args.len() > 2 {
-        eprintln!("Too many arguments");
-        eprintln!("Usage: systemdmgr [version]");
-        std::process::exit(1);
-    }
-    if args.len() == 2 {
-        match args[1].as_str() {
+    let mut host: Option<String> = None;
+    let mut i = 1;
+    while i < args.len() {
+        match args[i].as_str() {
             "version" | "--version" | "-v" => {
                 println!("systemdmgr {}", env!("CARGO_PKG_VERSION"));
                 return Ok(());
             }
+            "--ssh" => {
+                i += 1;
+                if i >= args.len() {
+                    eprintln!("--host requires a value (e.g., --ssh user@server)");
+                    std::process::exit(1);
+                }
+                host = Some(args[i].clone());
+            }
             arg => {
                 eprintln!("Unknown argument: {arg}");
-                eprintln!("Usage: systemdmgr [version]");
+                eprintln!("Usage: systemdmgr [--ssh user@server] [version]");
                 std::process::exit(1);
             }
         }
+        i += 1;
+    }
+
+    let _ssh_connection = if let Some(ref host) = host {
+        eprintln!("Connecting to {host}...");
+        match SshConnection::establish(host) {
+            Ok(conn) => {
+                eprintln!("Connected.");
+                Some(conn)
+            }
+            Err(e) => {
+                eprintln!("SSH connection failed: {e}");
+                std::process::exit(1);
+            }
+        }
+    } else {
+        None
+    };
+
+    let ssh_config = _ssh_connection.as_ref().map(|c| c.config.clone());
+
+    if let Some(ref conn) = _ssh_connection {
+        let control_path = conn.config.control_path.clone();
+        let host = conn.config.host.clone();
+        let default_hook = std::panic::take_hook();
+        std::panic::set_hook(Box::new(move |info| {
+            let _ = std::process::Command::new("ssh")
+                .args(["-o", &format!("ControlPath={control_path}"), "-O", "exit", &host])
+                .output();
+            let _ = std::fs::remove_file(&control_path);
+            default_hook(info);
+        }));
     }
 
     // Setup terminal with mouse capture
@@ -46,7 +84,7 @@ fn main() -> io::Result<()> {
     let backend = CrosstermBackend::new(stdout());
     let mut terminal = Terminal::new(backend)?;
 
-    let mut app = App::new();
+    let mut app = App::new(ssh_config);
     let mut last_live_tail_refresh = Instant::now();
     let mut last_live_indicator_blink = Instant::now();
     let mut live_indicator_on = true;
