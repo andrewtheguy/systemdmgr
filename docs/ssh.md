@@ -44,7 +44,7 @@ systemdmgr reads `~/.ssh/config` and resolves the following directives:
 
 | Directive | Description |
 |-----------|-------------|
-| `Host` | Pattern matching (exact match and `*` wildcard) |
+| `Host` | Pattern matching with exact names and `*`/`?` globs |
 | `HostName` | Resolved hostname to connect to |
 | `Port` | SSH port (overridden by `:port` in the CLI argument) |
 | `User` | Login username (overridden by `user@` in the CLI argument) |

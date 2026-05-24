@@ -103,6 +103,27 @@ fn expand_identity_path(path: std::path::PathBuf) -> std::path::PathBuf {
     path
 }
 
+fn ssh_host_pattern_matches(pattern: &str, host: &str) -> bool {
+    fn matches(pattern: &[u8], host: &[u8]) -> bool {
+        match (pattern, host) {
+            ([], []) => true,
+            ([], _) => false,
+            ([b'*', rest @ ..], _) => {
+                matches(rest, host) || (!host.is_empty() && matches(pattern, &host[1..]))
+            }
+            ([b'?', rest_pattern @ ..], [_, rest_host @ ..]) => matches(rest_pattern, rest_host),
+            ([pattern_char, rest_pattern @ ..], [host_char, rest_host @ ..])
+                if pattern_char == host_char =>
+            {
+                matches(rest_pattern, rest_host)
+            }
+            _ => false,
+        }
+    }
+
+    matches(pattern.as_bytes(), host.as_bytes())
+}
+
 impl SshRunner {
     pub fn connect(host: &str, identity_files: Vec<std::path::PathBuf>) -> Result<Self, String> {
         let mut parsed = SshHostConfig::resolve(host)?;
@@ -627,9 +648,9 @@ impl SshHostConfig {
             };
 
             if key.eq_ignore_ascii_case("Host") {
-                in_matching_block = value.split_whitespace().any(|pat| {
-                    if pat == "*" { true } else { pat == host_alias }
-                });
+                in_matching_block = value
+                    .split_whitespace()
+                    .any(|pat| ssh_host_pattern_matches(pat, host_alias));
                 continue;
             }
 
@@ -1474,6 +1495,49 @@ mod tests {
     #[test]
     fn test_parse_systemd_version_invalid() {
         assert_eq!(parse_systemd_version("not systemd\n"), None);
+    }
+
+    #[test]
+    fn test_ssh_host_pattern_matches_exact() {
+        assert!(ssh_host_pattern_matches("server", "server"));
+        assert!(!ssh_host_pattern_matches("server", "server1"));
+    }
+
+    #[test]
+    fn test_ssh_host_pattern_matches_star() {
+        assert!(ssh_host_pattern_matches("*", "server"));
+        assert!(ssh_host_pattern_matches("*.example.com", "api.example.com"));
+        assert!(!ssh_host_pattern_matches("*.example.com", "example.com"));
+    }
+
+    #[test]
+    fn test_ssh_host_pattern_matches_question_mark() {
+        assert!(ssh_host_pattern_matches("server?", "server1"));
+        assert!(!ssh_host_pattern_matches("server?", "server12"));
+    }
+
+    #[test]
+    fn test_ssh_config_host_glob_applies_matching_block() {
+        let mut config = SshHostConfig {
+            hostname: "api.example.com".into(),
+            port: 22,
+            user: "debian".into(),
+            identity_files: Vec::new(),
+            identity_files_override: false,
+        };
+
+        config.apply_ssh_config(
+            r#"
+Host *.example.com
+    HostName internal.example.com
+    User deploy
+"#,
+            "api.example.com",
+            false,
+        );
+
+        assert_eq!(config.hostname, "internal.example.com");
+        assert_eq!(config.user, "deploy");
     }
 
     // Phase 2 — UnitType::label
