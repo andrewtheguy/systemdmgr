@@ -13,7 +13,7 @@ The remote host must have systemd 246+ and `systemctl` on `PATH`; this is valida
 
 ## Connection
 
-systemdmgr uses the [ssh2](https://crates.io/crates/ssh2) crate (libssh2 bindings) for SSH connectivity. There is no dependency on the system `ssh` binary.
+systemdmgr uses the [ssh2](https://crates.io/crates/ssh2) crate (libssh2 bindings) for SSH connectivity and the [ssh2-config](https://crates.io/crates/ssh2-config) crate for parsing `~/.ssh/config`. There is no dependency on the system `ssh` binary.
 
 - A single TCP connection is opened and reused for all commands
 - Keepalive packets are sent every 60 seconds (`ServerAliveInterval` equivalent)
@@ -40,15 +40,17 @@ Passphrase-protected private key files are not supported when loaded directly fr
 
 ### `~/.ssh/config` Support
 
-systemdmgr reads `~/.ssh/config` and resolves the following directives:
+systemdmgr parses `~/.ssh/config` using the [ssh2-config](https://crates.io/crates/ssh2-config) crate and applies the following directives:
 
 | Directive | Description |
 |-----------|-------------|
-| `Host` | Pattern matching with exact names and `*`/`?` globs |
+| `Host` | Pattern matching with exact names and globs |
 | `HostName` | Resolved hostname to connect to |
 | `Port` | SSH port (overridden by `:port` in the CLI argument) |
 | `User` | Login username (overridden by `user@` in the CLI argument) |
 | `IdentityFile` | Path to private key file (`~` expansion supported) |
+
+Other directives recognized by `ssh2-config` (e.g., `Compression`, `ConnectTimeout`, `ProxyJump`) are parsed without error but not acted upon. Unrecognized and unsupported directives are silently ignored.
 
 Example `~/.ssh/config`:
 
@@ -64,7 +66,7 @@ Host prod
 systemdmgr --ssh prod
 ```
 
-Directives not listed above are ignored. CLI arguments (`user@`, `:port`) take precedence over config file values.
+CLI arguments (`user@`, `:port`) take precedence over config file values.
 
 ## Authentication
 

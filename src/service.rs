@@ -103,27 +103,6 @@ fn expand_identity_path(path: std::path::PathBuf) -> std::path::PathBuf {
     path
 }
 
-fn ssh_host_pattern_matches(pattern: &str, host: &str) -> bool {
-    fn matches(pattern: &[u8], host: &[u8]) -> bool {
-        match (pattern, host) {
-            ([], []) => true,
-            ([], _) => false,
-            ([b'*', rest @ ..], _) => {
-                matches(rest, host) || (!host.is_empty() && matches(pattern, &host[1..]))
-            }
-            ([b'?', rest_pattern @ ..], [_, rest_host @ ..]) => matches(rest_pattern, rest_host),
-            ([pattern_char, rest_pattern @ ..], [host_char, rest_host @ ..])
-                if pattern_char == host_char =>
-            {
-                matches(rest_pattern, rest_host)
-            }
-            _ => false,
-        }
-    }
-
-    matches(pattern.as_bytes(), host.as_bytes())
-}
-
 impl SshRunner {
     pub fn connect(host: &str, identity_files: Vec<std::path::PathBuf>) -> Result<Self, String> {
         let mut parsed = SshHostConfig::resolve(host)?;
@@ -525,17 +504,17 @@ fn read_hidden_terminal_line() -> io::Result<String> {
         match event::read()? {
             Event::Key(key) if key.kind == KeyEventKind::Press => match key.code {
                 KeyCode::Enter => {
-                    eprintln!();
+                    eprint!("\r\n");
                     return Ok(response);
                 }
                 KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                    eprintln!();
+                    eprint!("\r\n");
                     return Err(io::Error::new(io::ErrorKind::Interrupted, "interrupted"));
                 }
                 KeyCode::Char('d')
                     if key.modifiers.contains(KeyModifiers::CONTROL) && response.is_empty() =>
                 {
-                    eprintln!();
+                    eprint!("\r\n");
                     return Err(io::Error::new(io::ErrorKind::UnexpectedEof, "end of input"));
                 }
                 KeyCode::Char(c)
@@ -633,47 +612,31 @@ impl SshHostConfig {
     }
 
     fn apply_ssh_config(&mut self, content: &str, host_alias: &str, has_cli_port: bool) {
-        let mut in_matching_block = false;
-        let home = std::env::var("HOME").unwrap_or_default();
-
-        for line in content.lines() {
-            let line = line.trim();
-            if line.is_empty() || line.starts_with('#') {
-                continue;
+        let mut reader = std::io::BufReader::new(content.as_bytes());
+        let parsed = match ssh2_config::SshConfig::default()
+            .parse(&mut reader, ssh2_config::ParseRule::ALLOW_UNKNOWN_FIELDS | ssh2_config::ParseRule::ALLOW_UNSUPPORTED_FIELDS)
+        {
+            Ok(c) => c,
+            Err(e) => {
+                eprintln!("Warning: failed to parse ~/.ssh/config for host {}: {}", host_alias, e);
+                return;
             }
+        };
 
-            let (key, value) = match line.split_once(char::is_whitespace) {
-                Some((k, v)) => (k, v.trim()),
-                None => continue,
-            };
+        let params = parsed.query(host_alias);
 
-            if key.eq_ignore_ascii_case("Host") {
-                in_matching_block = value
-                    .split_whitespace()
-                    .any(|pat| ssh_host_pattern_matches(pat, host_alias));
-                continue;
+        if let Some(hostname) = params.host_name {
+            self.hostname = hostname;
+        }
+        if let Some(port) = params.port
+            && !has_cli_port {
+                self.port = port;
             }
-
-            if !in_matching_block {
-                continue;
-            }
-
-            if key.eq_ignore_ascii_case("HostName") {
-                self.hostname = value.to_string();
-            } else if key.eq_ignore_ascii_case("Port") && !has_cli_port {
-                if let Ok(p) = value.parse::<u16>() {
-                    self.port = p;
-                }
-            } else if key.eq_ignore_ascii_case("User") {
-                self.user = value.to_string();
-            } else if key.eq_ignore_ascii_case("IdentityFile") {
-                let expanded = if let Some(rest) = value.strip_prefix("~/") {
-                    format!("{}/{}", home, rest)
-                } else {
-                    value.to_string()
-                };
-                self.identity_files.push(std::path::PathBuf::from(expanded));
-            }
+        if let Some(user) = params.user {
+            self.user = user;
+        }
+        if let Some(files) = params.identity_file {
+            self.identity_files = files.into_iter().map(expand_identity_path).collect();
         }
     }
 }
@@ -1498,25 +1461,6 @@ mod tests {
     }
 
     #[test]
-    fn test_ssh_host_pattern_matches_exact() {
-        assert!(ssh_host_pattern_matches("server", "server"));
-        assert!(!ssh_host_pattern_matches("server", "server1"));
-    }
-
-    #[test]
-    fn test_ssh_host_pattern_matches_star() {
-        assert!(ssh_host_pattern_matches("*", "server"));
-        assert!(ssh_host_pattern_matches("*.example.com", "api.example.com"));
-        assert!(!ssh_host_pattern_matches("*.example.com", "example.com"));
-    }
-
-    #[test]
-    fn test_ssh_host_pattern_matches_question_mark() {
-        assert!(ssh_host_pattern_matches("server?", "server1"));
-        assert!(!ssh_host_pattern_matches("server?", "server12"));
-    }
-
-    #[test]
     fn test_ssh_config_host_glob_applies_matching_block() {
         let mut config = SshHostConfig {
             hostname: "api.example.com".into(),
@@ -1538,6 +1482,66 @@ Host *.example.com
 
         assert_eq!(config.hostname, "internal.example.com");
         assert_eq!(config.user, "deploy");
+    }
+
+    #[test]
+    fn test_ssh_config_exact_host_match() {
+        let mut config = SshHostConfig {
+            hostname: "myserver".into(),
+            port: 22,
+            user: "debian".into(),
+            identity_files: Vec::new(),
+            identity_files_override: false,
+        };
+
+        config.apply_ssh_config(
+            "Host myserver\n    HostName 10.0.0.1\n    Port 2222\n    User admin\n",
+            "myserver",
+            false,
+        );
+
+        assert_eq!(config.hostname, "10.0.0.1");
+        assert_eq!(config.port, 2222);
+        assert_eq!(config.user, "admin");
+    }
+
+    #[test]
+    fn test_ssh_config_no_match() {
+        let mut config = SshHostConfig {
+            hostname: "other".into(),
+            port: 22,
+            user: "debian".into(),
+            identity_files: Vec::new(),
+            identity_files_override: false,
+        };
+
+        config.apply_ssh_config(
+            "Host myserver\n    HostName 10.0.0.1\n    User admin\n",
+            "other",
+            false,
+        );
+
+        assert_eq!(config.hostname, "other");
+        assert_eq!(config.user, "debian");
+    }
+
+    #[test]
+    fn test_ssh_config_cli_port_not_overridden() {
+        let mut config = SshHostConfig {
+            hostname: "myserver".into(),
+            port: 3333,
+            user: "debian".into(),
+            identity_files: Vec::new(),
+            identity_files_override: false,
+        };
+
+        config.apply_ssh_config(
+            "Host myserver\n    Port 2222\n",
+            "myserver",
+            true,
+        );
+
+        assert_eq!(config.port, 3333);
     }
 
     // Phase 2 — UnitType::label
