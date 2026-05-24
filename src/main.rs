@@ -33,7 +33,7 @@ fn main() -> io::Result<()> {
             "--ssh" => {
                 i += 1;
                 if i >= args.len() {
-                    eprintln!("--host requires a value (e.g., --ssh user@server)");
+                    eprintln!("--ssh requires a value (e.g., --ssh user@server)");
                     std::process::exit(1);
                 }
                 host = Some(args[i].clone());

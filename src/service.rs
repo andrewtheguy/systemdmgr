@@ -43,6 +43,7 @@ impl SshConnection {
             if start.elapsed() > timeout {
                 let mut child = child;
                 let _ = child.kill();
+                let _ = child.wait();
                 return Err("SSH connection timed out".to_string());
             }
             std::thread::sleep(std::time::Duration::from_millis(100));
