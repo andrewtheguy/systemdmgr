@@ -26,9 +26,9 @@ src/
 ### Remote Management (SSH)
 
 - Enabled via `--ssh user@server` CLI flag
-- Uses the `ssh2` crate (libssh2 bindings) — no dependency on the system `ssh` binary
+- Uses the `ssh2` crate (libssh2 bindings) for connectivity and `ssh2-config` for config parsing — no dependency on the system `ssh` binary
 - A single TCP connection is opened and reused for all commands via `ssh2::Session`
-- Reads `~/.ssh/config` for Host aliases, HostName, Port, User, and IdentityFile
+- Parses `~/.ssh/config` via `ssh2-config` and applies Host aliases, HostName, Port, User, and IdentityFile
 - Supports `--ssh-identity-file` for explicit unencrypted private key files
 - Authentication via none, SSH agent, unencrypted key files, hostbased auth, keyboard-interactive prompts such as OTP/MFA, or password prompts
 - Remote target must have systemd 246+ with `systemctl` on `PATH`
