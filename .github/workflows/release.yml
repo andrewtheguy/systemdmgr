@@ -1,4 +1,4 @@
-name: Release
+name: Release (Manual)
 
 on:
   workflow_dispatch:
@@ -7,63 +7,65 @@ permissions:
   contents: write
 
 jobs:
-  prepare:
+  setup:
     runs-on: ubuntu-latest
     outputs:
-      tag: ${{ steps.version.outputs.tag }}
-      is_prerelease: ${{ steps.version.outputs.is_prerelease }}
+      release_tag: ${{ steps.version.outputs.new }}
+      is_prerelease: ${{ steps.version.outputs.prerelease }}
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      - name: Determine and validate version
+      - name: Determine version
         id: version
+        run: |
+          version=$(grep -m1 '^version = ' Cargo.toml | sed 's/version = "\(.*\)"/\1/')
+          if [ -z "$version" ]; then
+            echo "::error::Could not parse version from Cargo.toml"
+            exit 1
+          fi
+          tag="v$version"
+          echo "new=$tag" >> "$GITHUB_OUTPUT"
+          if [ "${{ github.ref }}" != "refs/heads/main" ]; then
+            echo "prerelease=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "prerelease=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Abort if tag already exists
+        run: |
+          if git ls-remote --tags origin "refs/tags/${{ steps.version.outputs.new }}" | grep -q .; then
+            echo "::error::Tag ${{ steps.version.outputs.new }} already exists on remote"
+            exit 1
+          fi
+
+      - name: Create draft release
         env:
-          GH_TOKEN: ${{ github.token }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GH_REPO: ${{ github.repository }}
         run: |
-          # Extract version from Cargo.toml
-          VERSION=$(grep -m1 '^version = ' Cargo.toml | sed 's/version = "\(.*\)"/\1/')
-          if [ -z "$VERSION" ]; then
-            echo "Could not determine version from Cargo.toml" >&2
-            exit 1
+          if gh release view "${{ steps.version.outputs.new }}" --json isDraft --jq '.isDraft' 2>/dev/null | grep -qx true; then
+            echo "Deleting stale draft release ${{ steps.version.outputs.new }}"
+            gh release delete "${{ steps.version.outputs.new }}" --yes
           fi
+          gh release create "${{ steps.version.outputs.new }}" \
+            --draft \
+            --target "${{ github.sha }}" \
+            --title "Release ${{ steps.version.outputs.new }}" \
+            --generate-notes \
+            ${{ steps.version.outputs.prerelease == 'true' && '--prerelease' || '' }}
 
-          TAG="v${VERSION}"
-          echo "Release tag: ${TAG}"
-
-          # Check if tag already exists
-          if gh api "repos/${GH_REPO}/git/ref/tags/${TAG}" >/dev/null 2>&1; then
-            echo "Tag ${TAG} already exists. Bump the version in Cargo.toml before releasing." >&2
-            exit 1
-          fi
-
-          # Prerelease if not on main branch
-          IS_PRERELEASE="false"
-          if [ "$GITHUB_REF_NAME" != "main" ]; then
-            IS_PRERELEASE="true"
-          fi
-
-          echo "tag=${TAG}" >> $GITHUB_OUTPUT
-          echo "is_prerelease=${IS_PRERELEASE}" >> $GITHUB_OUTPUT
-
-  build-linux:
-    needs: prepare
+  build:
+    needs: setup
     strategy:
       matrix:
         include:
           - runner: ubuntu-latest
-            arch: amd64
-            target: x86_64-unknown-linux-gnu
+            label: linux-amd64
           - runner: ubuntu-24.04-arm
-            arch: arm64
-            target: aarch64-unknown-linux-gnu
-
+            label: linux-arm64
     runs-on: ${{ matrix.runner }}
-
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
       - name: Rust cache
         uses: Swatinem/rust-cache@v2
@@ -72,30 +74,37 @@ jobs:
         run: cargo build --release
 
       - name: Rename binary
-        run: mv target/release/systemdmgr target/release/systemdmgr-linux-${{ matrix.arch }}
+        run: mv target/release/systemdmgr target/release/systemdmgr-${{ matrix.label }}
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: systemdmgr-linux-${{ matrix.arch }}
-          path: target/release/systemdmgr-linux-${{ matrix.arch }}
+          name: systemdmgr-${{ matrix.label }}
+          path: target/release/systemdmgr-${{ matrix.label }}
+          if-no-files-found: error
 
-  release:
-    needs: [prepare, build-linux]
+  create-release:
+    needs: [setup, build]
     runs-on: ubuntu-latest
-
     steps:
-      - name: Download all artifacts
+      - name: Download release artifacts
         uses: actions/download-artifact@v4
         with:
+          pattern: systemdmgr-*
           path: artifacts
           merge-multiple: true
 
-      - name: Create release
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: ${{ needs.prepare.outputs.tag }}
-          name: ${{ needs.prepare.outputs.tag }}
-          files: artifacts/*
-          prerelease: ${{ needs.prepare.outputs.is_prerelease == 'true' }}
-          generate_release_notes: true
+      - name: List artifacts
+        run: ls -la artifacts/
+
+      - name: Upload artifacts to draft release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+        run: gh release upload "${{ needs.setup.outputs.release_tag }}" artifacts/* --clobber
+
+      - name: Publish release (remove draft, creates the tag)
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+        run: gh release edit "${{ needs.setup.outputs.release_tag }}" --draft=false
