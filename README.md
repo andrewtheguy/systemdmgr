@@ -54,7 +54,7 @@ Manage systemd units on a remote server over SSH:
 systemdmgr --ssh user@server
 ```
 
-Authenticates via SSH agent, key files, keyboard-interactive prompts such as OTP/MFA, or password prompts, then reuses a single connection for all commands. Supports `~/.ssh/config` Host aliases, custom ports, and identity files. `--user` mode works over SSH (requires `loginctl enable-linger` on the remote).
+Authenticates via none, SSH agent, key files, hostbased auth, keyboard-interactive prompts such as OTP/MFA, or password prompts, then reuses a single connection for all commands. Supports `~/.ssh/config` Host aliases, custom ports, and identity files. `--user` mode works over SSH (requires `loginctl enable-linger` on the remote).
 
 See [docs/ssh.md](docs/ssh.md) for full details on host resolution, authentication, and troubleshooting.
 

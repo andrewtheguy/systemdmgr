@@ -60,12 +60,14 @@ Directives not listed above are ignored. CLI arguments (`user@`, `:port`) take p
 
 Authentication is attempted in this order:
 
-1. **SSH agent** (`ssh-agent`) -- tried first. Works with any loaded key.
-2. **Key files** -- if the agent fails, key files are tried:
+1. **None** -- the initial auth-method discovery request can authenticate servers that explicitly allow `none`.
+2. **SSH agent** (`ssh-agent`) -- all loaded identities are tried.
+3. **Key files** -- if the agent fails, key files are tried:
    - If `IdentityFile` is set in `~/.ssh/config`, those paths are used.
    - Otherwise, the default keys are tried: `~/.ssh/id_ed25519`, `~/.ssh/id_rsa`, `~/.ssh/id_ecdsa`.
-3. **Keyboard-interactive** -- if the server requests interactive prompts, systemdmgr displays them before entering the TUI. This supports OTP, MFA, and PAM challenge flows, and honors whether each response should be echoed.
-4. **Password** -- if the server offers plain SSH password authentication, systemdmgr prompts up to three times with hidden input.
+4. **Hostbased** -- if the server offers hostbased authentication, readable local host keys under `/etc/ssh/ssh_host_*_key` are tried.
+5. **Keyboard-interactive** -- if the server requests interactive prompts, systemdmgr displays them before entering the TUI. This supports OTP, MFA, and PAM challenge flows, and honors whether each response should be echoed.
+6. **Password** -- if the server offers plain SSH password authentication, systemdmgr prompts up to three times with hidden input.
 
 Authentication prompts are shown before systemdmgr enters the TUI.
 

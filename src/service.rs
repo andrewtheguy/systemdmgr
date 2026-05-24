@@ -95,9 +95,7 @@ fn authenticate_session(session: &ssh2::Session, parsed: &SshHostConfig) -> Resu
     }
 
     if auth_method_supported(auth_methods.as_deref(), "publickey") {
-        if let Err(err) = session.userauth_agent(&parsed.user) {
-            errors.push(format!("SSH agent: {}", err));
-        }
+        authenticate_with_agent(session, parsed, &mut errors);
         if session.authenticated() {
             return Ok(());
         }
@@ -127,6 +125,13 @@ fn authenticate_session(session: &ssh2::Session, parsed: &SshHostConfig) -> Resu
             if session.authenticated() {
                 return Ok(());
             }
+        }
+    }
+
+    if auth_method_supported(auth_methods.as_deref(), "hostbased") {
+        authenticate_with_hostbased(session, parsed, &mut errors);
+        if session.authenticated() {
+            return Ok(());
         }
     }
 
@@ -166,6 +171,122 @@ fn auth_method_supported(methods: Option<&str>, method: &str) -> bool {
     methods.is_none_or(|methods| {
         methods.split(',').any(|candidate| candidate.trim() == method)
     })
+}
+
+fn authenticate_with_agent(
+    session: &ssh2::Session,
+    parsed: &SshHostConfig,
+    errors: &mut Vec<String>,
+) {
+    let mut agent = match session.agent() {
+        Ok(agent) => agent,
+        Err(err) => {
+            errors.push(format!("SSH agent: {}", err));
+            return;
+        }
+    };
+    if let Err(err) = agent.connect() {
+        errors.push(format!("SSH agent: {}", err));
+        return;
+    }
+    if let Err(err) = agent.list_identities() {
+        errors.push(format!("SSH agent: {}", err));
+        let _ = agent.disconnect();
+        return;
+    }
+    let identities = match agent.identities() {
+        Ok(identities) => identities,
+        Err(err) => {
+            errors.push(format!("SSH agent: {}", err));
+            let _ = agent.disconnect();
+            return;
+        }
+    };
+    if identities.is_empty() {
+        errors.push("SSH agent: no identities found in the ssh agent".to_string());
+        let _ = agent.disconnect();
+        return;
+    }
+
+    let mut last_error = None;
+    for identity in &identities {
+        match agent.userauth(&parsed.user, identity) {
+            Ok(()) if session.authenticated() => {
+                let _ = agent.disconnect();
+                return;
+            }
+            Ok(()) => {}
+            Err(err) => last_error = Some(err.to_string()),
+        }
+        if session.authenticated() {
+            let _ = agent.disconnect();
+            return;
+        }
+    }
+    let _ = agent.disconnect();
+
+    if let Some(err) = last_error {
+        errors.push(format!("SSH agent: {}", err));
+    } else {
+        errors.push("SSH agent: no loaded identity was accepted".to_string());
+    }
+}
+
+fn authenticate_with_hostbased(
+    session: &ssh2::Session,
+    parsed: &SshHostConfig,
+    errors: &mut Vec<String>,
+) {
+    let hostname = local_hostname();
+    let local_username = std::env::var("USER").unwrap_or_else(|_| parsed.user.clone());
+    let candidates = [
+        ("/etc/ssh/ssh_host_ed25519_key.pub", "/etc/ssh/ssh_host_ed25519_key"),
+        ("/etc/ssh/ssh_host_ecdsa_key.pub", "/etc/ssh/ssh_host_ecdsa_key"),
+        ("/etc/ssh/ssh_host_rsa_key.pub", "/etc/ssh/ssh_host_rsa_key"),
+    ];
+    let mut tried = false;
+
+    for (public_key, private_key) in candidates {
+        let public_key = std::path::Path::new(public_key);
+        let private_key = std::path::Path::new(private_key);
+        if !public_key.exists() || std::fs::File::open(private_key).is_err() {
+            continue;
+        }
+
+        tried = true;
+        match session.userauth_hostbased_file(
+            &parsed.user,
+            public_key,
+            private_key,
+            None,
+            &hostname,
+            Some(&local_username),
+        ) {
+            Ok(()) if session.authenticated() => return,
+            Ok(()) => {}
+            Err(err) => errors.push(format!("hostbased {}: {}", private_key.display(), err)),
+        }
+        if session.authenticated() {
+            return;
+        }
+    }
+
+    if !tried {
+        errors.push("hostbased: no readable local host key found".to_string());
+    }
+}
+
+fn local_hostname() -> String {
+    std::env::var("HOSTNAME")
+        .ok()
+        .filter(|hostname| !hostname.trim().is_empty())
+        .or_else(|| {
+            std::fs::read_to_string("/etc/hostname")
+                .ok()
+                .map(|hostname| hostname.trim().to_string())
+                .filter(|hostname| !hostname.is_empty())
+        })
+        .unwrap_or_else(|| "localhost".to_string())
 }
 
 fn authenticate_with_password(
