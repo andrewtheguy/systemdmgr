@@ -614,10 +614,13 @@ impl SshHostConfig {
     fn apply_ssh_config(&mut self, content: &str, host_alias: &str, has_cli_port: bool) {
         let mut reader = std::io::BufReader::new(content.as_bytes());
         let parsed = match ssh2_config::SshConfig::default()
-            .parse(&mut reader, ssh2_config::ParseRule::ALLOW_UNKNOWN_FIELDS.union(ssh2_config::ParseRule::ALLOW_UNSUPPORTED_FIELDS))
+            .parse(&mut reader, ssh2_config::ParseRule::ALLOW_UNKNOWN_FIELDS | ssh2_config::ParseRule::ALLOW_UNSUPPORTED_FIELDS)
         {
             Ok(c) => c,
-            Err(_) => return,
+            Err(e) => {
+                eprintln!("Warning: failed to parse ~/.ssh/config for host {}: {}", host_alias, e);
+                return;
+            }
         };
 
         let params = parsed.query(host_alias);
