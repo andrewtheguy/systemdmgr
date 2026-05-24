@@ -64,8 +64,10 @@ Authentication is attempted in this order:
 2. **Key files** -- if the agent fails, key files are tried:
    - If `IdentityFile` is set in `~/.ssh/config`, those paths are used.
    - Otherwise, the default keys are tried: `~/.ssh/id_ed25519`, `~/.ssh/id_rsa`, `~/.ssh/id_ecdsa`.
+3. **Keyboard-interactive** -- if the server requests interactive prompts, systemdmgr displays them before entering the TUI. This supports OTP, MFA, and PAM challenge flows, and honors whether each response should be echoed.
+4. **Password** -- if the server offers plain SSH password authentication, systemdmgr prompts up to three times with hidden input.
 
-Password authentication is not currently supported. Ensure you have either an SSH agent running or key files accessible.
+Authentication prompts are shown before systemdmgr enters the TUI.
 
 ## User Mode
 
@@ -111,7 +113,7 @@ When running commands over SSH, arguments are combined into a single command str
 
 | Problem | Solution |
 |---------|----------|
-| "SSH authentication failed: no suitable key found" | Ensure `ssh-agent` is running with keys loaded, or that key files exist at `~/.ssh/id_ed25519` (or similar). Check `IdentityFile` in `~/.ssh/config`. |
+| "SSH authentication failed: no supported authentication methods succeeded" | Ensure `ssh-agent` is running with keys loaded, key files exist at `~/.ssh/id_ed25519` (or similar), or the server offers keyboard-interactive/password authentication. Check `IdentityFile` in `~/.ssh/config`. |
 | "Failed to connect to host:22" | Verify the host is reachable and sshd is running. Check `HostName` and `Port` in `~/.ssh/config`. |
 | "SSH handshake failed" | The remote server may not support the key exchange algorithms available in libssh2. |
 | User units not visible | Run `loginctl enable-linger <username>` on the remote server. |

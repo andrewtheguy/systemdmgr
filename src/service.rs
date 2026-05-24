@@ -1,11 +1,16 @@
 use chrono::TimeZone;
+use crossterm::{
+    event::{self, Event, KeyCode, KeyEventKind, KeyModifiers},
+    terminal::{disable_raw_mode, enable_raw_mode, is_raw_mode_enabled},
+};
 use ratatui::style::Color;
+use ssh2::{KeyboardInteractivePrompt, Prompt};
 
 /// Muted foreground color for inactive/dimmed states (visible on DarkGray highlight)
 pub const COLOR_MUTED: Color = Color::Rgb(100, 100, 100);
 use serde::Deserialize;
 use std::collections::HashMap;
-use std::io::Read as _;
+use std::io::{self, Read as _, Write as _};
 use std::net::TcpStream;
 use std::process::{Command, Stdio};
 use std::sync::{Arc, Mutex};
@@ -67,40 +72,269 @@ impl SshRunner {
             .map_err(|e| format!("SSH handshake failed: {}", e))?;
         session.set_keepalive(true, 60);
 
-        if session.userauth_agent(&parsed.user).is_err() {
-            let home = std::env::var("HOME").unwrap_or_default();
-            let default_keys: Vec<std::path::PathBuf> = ["id_ed25519", "id_rsa", "id_ecdsa"]
-                .iter()
-                .map(|k| std::path::PathBuf::from(format!("{}/.ssh/{}", home, k)))
-                .collect();
-            let candidates = if parsed.identity_files.is_empty() {
-                &default_keys
-            } else {
-                &parsed.identity_files
-            };
-            let mut authed = false;
-            for path in candidates {
-                if path.exists()
-                    && session.userauth_pubkey_file(&parsed.user, None, path, None).is_ok()
-                {
-                    authed = true;
-                    break;
-                }
-            }
-            if !authed && !session.authenticated() {
-                return Err("SSH authentication failed: no suitable key found".to_string());
-            }
-        }
-
-        if !session.authenticated() {
-            return Err("SSH authentication failed".to_string());
-        }
+        authenticate_session(&session, &parsed)?;
 
         Ok(SshRunner {
             session: Arc::new(Mutex::new(session)),
         })
     }
 
+}
+
+fn authenticate_session(session: &ssh2::Session, parsed: &SshHostConfig) -> Result<(), String> {
+    let mut errors = Vec::new();
+    let auth_methods = match session.auth_methods(&parsed.user) {
+        Ok(methods) => Some(methods.to_string()),
+        Err(err) => {
+            errors.push(format!("auth methods: {}", err));
+            None
+        }
+    };
+    if session.authenticated() {
+        return Ok(());
+    }
+
+    if auth_method_supported(auth_methods.as_deref(), "publickey") {
+        if let Err(err) = session.userauth_agent(&parsed.user) {
+            errors.push(format!("SSH agent: {}", err));
+        }
+        if session.authenticated() {
+            return Ok(());
+        }
+    }
+
+    if auth_method_supported(auth_methods.as_deref(), "publickey") {
+        let home = std::env::var("HOME").unwrap_or_default();
+        let default_keys: Vec<std::path::PathBuf> = ["id_ed25519", "id_rsa", "id_ecdsa"]
+            .iter()
+            .map(|k| std::path::PathBuf::from(format!("{}/.ssh/{}", home, k)))
+            .collect();
+        let candidates = if parsed.identity_files.is_empty() {
+            &default_keys
+        } else {
+            &parsed.identity_files
+        };
+
+        for path in candidates {
+            if !path.exists() {
+                continue;
+            }
+            match session.userauth_pubkey_file(&parsed.user, None, path, None) {
+                Ok(()) if session.authenticated() => return Ok(()),
+                Ok(()) => break,
+                Err(err) => errors.push(format!("key {}: {}", path.display(), err)),
+            }
+            if session.authenticated() {
+                return Ok(());
+            }
+        }
+    }
+
+    if auth_method_supported(auth_methods.as_deref(), "keyboard-interactive") {
+        let mut prompter = TerminalKeyboardInteractive::default();
+        match session.userauth_keyboard_interactive(&parsed.user, &mut prompter) {
+            Ok(()) if session.authenticated() => return Ok(()),
+            Ok(()) => errors.push("keyboard-interactive: server did not complete authentication".to_string()),
+            Err(err) => errors.push(format!("keyboard-interactive: {}", err)),
+        }
+        if let Some(err) = prompter.error {
+            return Err(format!("SSH authentication failed: {}", err));
+        }
+        if session.authenticated() {
+            return Ok(());
+        }
+    }
+
+    if auth_method_supported(auth_methods.as_deref(), "password") {
+        authenticate_with_password(session, parsed, &mut errors)?;
+        if session.authenticated() {
+            return Ok(());
+        }
+    }
+
+    if errors.is_empty() {
+        Err("SSH authentication failed: no supported authentication methods succeeded".to_string())
+    } else {
+        Err(format!(
+            "SSH authentication failed: no supported authentication methods succeeded ({})",
+            errors.join("; ")
+        ))
+    }
+}
+
+fn auth_method_supported(methods: Option<&str>, method: &str) -> bool {
+    methods.is_none_or(|methods| {
+        methods.split(',').any(|candidate| candidate.trim() == method)
+    })
+}
+
+fn authenticate_with_password(
+    session: &ssh2::Session,
+    parsed: &SshHostConfig,
+    errors: &mut Vec<String>,
+) -> Result<(), String> {
+    for attempt in 1..=3 {
+        let prompt = format!("{}@{}'s password: ", parsed.user, parsed.hostname);
+        let password = read_hidden_prompted_line(&prompt)
+            .map_err(|err| format!("SSH authentication failed: failed to read password: {}", err))?;
+
+        match session.userauth_password(&parsed.user, &password) {
+            Ok(()) if session.authenticated() => return Ok(()),
+            Ok(()) => errors.push("password: server did not complete authentication".to_string()),
+            Err(err) => {
+                if attempt == 3 {
+                    errors.push(format!("password: {}", err));
+                } else {
+                    eprintln!("Permission denied, please try again.");
+                }
+            }
+        }
+        if session.authenticated() {
+            return Ok(());
+        }
+    }
+
+    Ok(())
+}
+
+#[derive(Default)]
+struct TerminalKeyboardInteractive {
+    error: Option<String>,
+}
+
+impl KeyboardInteractivePrompt for TerminalKeyboardInteractive {
+    fn prompt<'a>(
+        &mut self,
+        _username: &str,
+        instructions: &str,
+        prompts: &[Prompt<'a>],
+    ) -> Vec<String> {
+        if self.error.is_some() {
+            return vec![String::new(); prompts.len()];
+        }
+
+        if !instructions.is_empty() {
+            eprint!("{instructions}");
+            if !instructions.ends_with('\n') {
+                eprintln!();
+            }
+        }
+
+        let mut responses = Vec::with_capacity(prompts.len());
+        for prompt in prompts {
+            match read_keyboard_interactive_response(prompt) {
+                Ok(response) => responses.push(response),
+                Err(err) => {
+                    self.error = Some(format!(
+                        "failed to read keyboard-interactive response: {}",
+                        err
+                    ));
+                    while responses.len() < prompts.len() {
+                        responses.push(String::new());
+                    }
+                    break;
+                }
+            }
+        }
+        responses
+    }
+}
+
+fn read_keyboard_interactive_response(prompt: &Prompt<'_>) -> io::Result<String> {
+    if prompt.echo {
+        eprint!("{}", prompt.text);
+        io::stderr().flush()?;
+        read_echoed_terminal_line()
+    } else {
+        read_hidden_prompted_line(&prompt.text)
+    }
+}
+
+fn read_hidden_prompted_line(prompt: &str) -> io::Result<String> {
+    eprint!("{prompt}");
+    io::stderr().flush()?;
+    read_hidden_terminal_line()
+}
+
+fn read_echoed_terminal_line() -> io::Result<String> {
+    let mut response = String::new();
+    let bytes_read = io::stdin().read_line(&mut response)?;
+    if bytes_read == 0 {
+        return Err(io::Error::new(io::ErrorKind::UnexpectedEof, "end of input"));
+    }
+    trim_line_end(&mut response);
+    Ok(response)
+}
+
+fn trim_line_end(value: &mut String) {
+    if value.ends_with('\n') {
+        value.pop();
+        if value.ends_with('\r') {
+            value.pop();
+        }
+    }
+}
+
+struct RawModeGuard {
+    enabled_by_us: bool,
+}
+
+impl RawModeGuard {
+    fn enable() -> io::Result<Self> {
+        let was_enabled = is_raw_mode_enabled()?;
+        if !was_enabled {
+            enable_raw_mode()?;
+        }
+        Ok(Self {
+            enabled_by_us: !was_enabled,
+        })
+    }
+}
+
+impl Drop for RawModeGuard {
+    fn drop(&mut self) {
+        if self.enabled_by_us {
+            let _ = disable_raw_mode();
+        }
+    }
+}
+
+fn read_hidden_terminal_line() -> io::Result<String> {
+    let _raw_mode = RawModeGuard::enable()?;
+    let mut response = String::new();
+
+    loop {
+        match event::read()? {
+            Event::Key(key) if key.kind == KeyEventKind::Press => match key.code {
+                KeyCode::Enter => {
+                    eprintln!();
+                    return Ok(response);
+                }
+                KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                    eprintln!();
+                    return Err(io::Error::new(io::ErrorKind::Interrupted, "interrupted"));
+                }
+                KeyCode::Char('d')
+                    if key.modifiers.contains(KeyModifiers::CONTROL) && response.is_empty() =>
+                {
+                    eprintln!();
+                    return Err(io::Error::new(io::ErrorKind::UnexpectedEof, "end of input"));
+                }
+                KeyCode::Char(c)
+                    if !key.modifiers.contains(KeyModifiers::CONTROL)
+                        && !key.modifiers.contains(KeyModifiers::ALT) =>
+                {
+                    response.push(c);
+                }
+                KeyCode::Backspace => {
+                    response.pop();
+                }
+                _ => {}
+            },
+            Event::Paste(text) => response.push_str(&text),
+            _ => {}
+        }
+    }
 }
 
 impl CommandRunner for SshRunner {

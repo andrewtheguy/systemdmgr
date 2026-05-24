@@ -28,7 +28,7 @@ src/
 - Uses the `ssh2` crate (libssh2 bindings) — no dependency on the system `ssh` binary
 - A single TCP connection is opened and reused for all commands via `ssh2::Session`
 - Reads `~/.ssh/config` for Host aliases, HostName, Port, User, and IdentityFile
-- Authentication via SSH agent or key files (password auth not supported)
+- Authentication via SSH agent, key files, keyboard-interactive prompts such as OTP/MFA, or password prompts
 - Both system and user (`--user`) mode supported over SSH
 - Header displays remote host (e.g., `"SystemD Services [System] on user@server"`)
 - Connection cleanup via `Drop` on normal exit
