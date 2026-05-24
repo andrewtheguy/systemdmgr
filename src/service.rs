@@ -57,9 +57,21 @@ fn shell_quote(arg: &str) -> String {
     format!("'{}'", arg.replace('\'', "'\\''"))
 }
 
+fn expand_identity_path(path: std::path::PathBuf) -> std::path::PathBuf {
+    if let Some(rest) = path.to_str().and_then(|value| value.strip_prefix("~/"))
+        && let Ok(home) = std::env::var("HOME") {
+        return std::path::PathBuf::from(format!("{}/{}", home, rest));
+    }
+    path
+}
+
 impl SshRunner {
-    pub fn connect(host: &str) -> Result<Self, String> {
-        let parsed = SshHostConfig::resolve(host)?;
+    pub fn connect(host: &str, identity_files: Vec<std::path::PathBuf>) -> Result<Self, String> {
+        let mut parsed = SshHostConfig::resolve(host)?;
+        if !identity_files.is_empty() {
+            parsed.identity_files = identity_files.into_iter().map(expand_identity_path).collect();
+            parsed.identity_files_override = true;
+        }
 
         let addr = format!("{}:{}", parsed.hostname, parsed.port);
         let tcp = TcpStream::connect(&addr)
@@ -94,6 +106,13 @@ fn authenticate_session(session: &ssh2::Session, parsed: &SshHostConfig) -> Resu
         return Ok(());
     }
 
+    if auth_method_supported(auth_methods.as_deref(), "publickey") && parsed.identity_files_override {
+        authenticate_with_key_files(session, parsed, &mut errors);
+        if session.authenticated() {
+            return Ok(());
+        }
+    }
+
     if auth_method_supported(auth_methods.as_deref(), "publickey") {
         authenticate_with_agent(session, parsed, &mut errors);
         if session.authenticated() {
@@ -101,30 +120,10 @@ fn authenticate_session(session: &ssh2::Session, parsed: &SshHostConfig) -> Resu
         }
     }
 
-    if auth_method_supported(auth_methods.as_deref(), "publickey") {
-        let home = std::env::var("HOME").unwrap_or_default();
-        let default_keys: Vec<std::path::PathBuf> = ["id_ed25519", "id_rsa", "id_ecdsa"]
-            .iter()
-            .map(|k| std::path::PathBuf::from(format!("{}/.ssh/{}", home, k)))
-            .collect();
-        let candidates = if parsed.identity_files.is_empty() {
-            &default_keys
-        } else {
-            &parsed.identity_files
-        };
-
-        for path in candidates {
-            if !path.exists() {
-                continue;
-            }
-            match session.userauth_pubkey_file(&parsed.user, None, path, None) {
-                Ok(()) if session.authenticated() => return Ok(()),
-                Ok(()) => break,
-                Err(err) => errors.push(format!("key {}: {}", path.display(), err)),
-            }
-            if session.authenticated() {
-                return Ok(());
-            }
+    if auth_method_supported(auth_methods.as_deref(), "publickey") && !parsed.identity_files_override {
+        authenticate_with_key_files(session, parsed, &mut errors);
+        if session.authenticated() {
+            return Ok(());
         }
     }
 
@@ -171,6 +170,40 @@ fn auth_method_supported(methods: Option<&str>, method: &str) -> bool {
     methods.is_none_or(|methods| {
         methods.split(',').any(|candidate| candidate.trim() == method)
     })
+}
+
+fn authenticate_with_key_files(
+    session: &ssh2::Session,
+    parsed: &SshHostConfig,
+    errors: &mut Vec<String>,
+) {
+    let home = std::env::var("HOME").unwrap_or_default();
+    let default_keys: Vec<std::path::PathBuf> = ["id_ed25519", "id_rsa", "id_ecdsa"]
+        .iter()
+        .map(|k| std::path::PathBuf::from(format!("{}/.ssh/{}", home, k)))
+        .collect();
+    let candidates = if parsed.identity_files.is_empty() {
+        &default_keys
+    } else {
+        &parsed.identity_files
+    };
+
+    for path in candidates {
+        if !path.exists() {
+            if parsed.identity_files_override {
+                errors.push(format!("key {}: file not found", path.display()));
+            }
+            continue;
+        }
+        match session.userauth_pubkey_file(&parsed.user, None, path, None) {
+            Ok(()) if session.authenticated() => return,
+            Ok(()) => break,
+            Err(err) => errors.push(format!("key {}: {}", path.display(), err)),
+        }
+        if session.authenticated() {
+            return;
+        }
+    }
 }
 
 fn authenticate_with_agent(
@@ -499,6 +532,7 @@ struct SshHostConfig {
     port: u16,
     user: String,
     identity_files: Vec<std::path::PathBuf>,
+    identity_files_override: bool,
 }
 
 impl SshHostConfig {
@@ -523,6 +557,7 @@ impl SshHostConfig {
             port: cli_port.unwrap_or(22),
             user: cli_user.unwrap_or(default_user),
             identity_files: Vec::new(),
+            identity_files_override: false,
         };
 
         let config_path = format!("{}/.ssh/config", home);

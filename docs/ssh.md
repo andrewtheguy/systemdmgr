@@ -28,6 +28,14 @@ The `--ssh` argument accepts these forms:
 | `user@host` | `systemdmgr --ssh deploy@myserver` |
 | `user@host:port` | `systemdmgr --ssh deploy@myserver:2222` |
 
+Use `--ssh-identity-file` to specify one or more private key files from the CLI:
+
+```bash
+systemdmgr --ssh deploy@myserver --ssh-identity-file ~/.ssh/deploy_key
+```
+
+When this flag is present, the specified key files override `IdentityFile` entries from `~/.ssh/config` and are tried before SSH agent identities.
+
 ### `~/.ssh/config` Support
 
 systemdmgr reads `~/.ssh/config` and resolves the following directives:
@@ -61,13 +69,14 @@ Directives not listed above are ignored. CLI arguments (`user@`, `:port`) take p
 Authentication is attempted in this order:
 
 1. **None** -- the initial auth-method discovery request can authenticate servers that explicitly allow `none`.
-2. **SSH agent** (`ssh-agent`) -- all loaded identities are tried.
-3. **Key files** -- if the agent fails, key files are tried:
+2. **CLI key files** -- if `--ssh-identity-file` is set, those paths are tried before the agent.
+3. **SSH agent** (`ssh-agent`) -- all loaded identities are tried.
+4. **Config/default key files** -- if the agent fails and no CLI key file was specified, key files are tried:
    - If `IdentityFile` is set in `~/.ssh/config`, those paths are used.
    - Otherwise, the default keys are tried: `~/.ssh/id_ed25519`, `~/.ssh/id_rsa`, `~/.ssh/id_ecdsa`.
-4. **Hostbased** -- if the server offers hostbased authentication, readable local host keys under `/etc/ssh/ssh_host_*_key` are tried.
-5. **Keyboard-interactive** -- if the server requests interactive prompts, systemdmgr displays them before entering the TUI. This supports OTP, MFA, and PAM challenge flows, and honors whether each response should be echoed.
-6. **Password** -- if the server offers plain SSH password authentication, systemdmgr prompts up to three times with hidden input.
+5. **Hostbased** -- if the server offers hostbased authentication, readable local host keys under `/etc/ssh/ssh_host_*_key` are tried.
+6. **Keyboard-interactive** -- if the server requests interactive prompts, systemdmgr displays them before entering the TUI. This supports OTP, MFA, and PAM challenge flows, and honors whether each response should be echoed.
+7. **Password** -- if the server offers plain SSH password authentication, systemdmgr prompts up to three times with hidden input.
 
 Authentication prompts are shown before systemdmgr enters the TUI.
 

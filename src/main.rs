@@ -25,6 +25,7 @@ const LIVE_TAIL_REFRESH_INTERVAL: Duration = Duration::from_millis(500);
 fn main() -> io::Result<()> {
     let args: Vec<String> = std::env::args().collect();
     let mut host: Option<String> = None;
+    let mut identity_files: Vec<std::path::PathBuf> = Vec::new();
     let mut i = 1;
     while i < args.len() {
         match args[i].as_str() {
@@ -40,18 +41,31 @@ fn main() -> io::Result<()> {
                 }
                 host = Some(args[i].clone());
             }
+            "--ssh-identity-file" => {
+                i += 1;
+                if i >= args.len() {
+                    eprintln!("--ssh-identity-file requires a path");
+                    std::process::exit(1);
+                }
+                identity_files.push(std::path::PathBuf::from(&args[i]));
+            }
             arg => {
                 eprintln!("Unknown argument: {arg}");
-                eprintln!("Usage: systemdmgr [--ssh user@server] [version]");
+                eprintln!("Usage: systemdmgr [--ssh user@server] [--ssh-identity-file path] [version]");
                 std::process::exit(1);
             }
         }
         i += 1;
     }
 
+    if host.is_none() && !identity_files.is_empty() {
+        eprintln!("--ssh-identity-file requires --ssh");
+        std::process::exit(1);
+    }
+
     let (runner, host_label): (Arc<dyn CommandRunner>, Option<String>) = if let Some(ref host) = host {
         eprintln!("Connecting to {host}...");
-        match SshRunner::connect(host) {
+        match SshRunner::connect(host, identity_files) {
             Ok(r) => {
                 eprintln!("Connected.");
                 (Arc::new(r), Some(host.clone()))
