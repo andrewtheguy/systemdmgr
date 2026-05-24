@@ -52,11 +52,12 @@ Manage systemd units on a remote server over SSH:
 
 ```bash
 systemdmgr --ssh user@server
+systemdmgr --ssh user@server --ssh-identity-file ~/.ssh/deploy_key
 ```
 
-The SSH connection authenticates once interactively (password, 2FA, agent keys all work) and reuses the connection for all subsequent commands via OpenSSH ControlMaster. The host can be any valid SSH destination, including `~/.ssh/config` aliases.
+Authenticates via none, SSH agent, unencrypted key files, hostbased auth, keyboard-interactive prompts such as OTP/MFA, or password prompts, then reuses a single connection for all commands. Supports `~/.ssh/config` Host aliases, custom ports, and identity files. Add passphrase-protected keys to `ssh-agent`; direct key-file authentication does not prompt for private key passphrases. `--user` mode works over SSH (requires `loginctl enable-linger` on the remote).
 
-`--user` mode is supported over SSH (requires `loginctl enable-linger` on the remote).
+See [docs/ssh.md](docs/ssh.md) for full details on host resolution, authentication, and troubleshooting.
 
 ### Version
 
@@ -113,12 +114,14 @@ Press `?` in the app to see context-sensitive help.
 ## Documentation
 
 - [Specification](docs/spec.md) — architecture, features, and UI details
+- [SSH Remote Management](docs/ssh.md) — host resolution, authentication, and troubleshooting
 - [Roadmap](docs/roadmap.md) — planned features and future considerations
 
 ## Requirements
 
 - Rust 1.85+ (2024 edition)
-- Linux with systemd (for local management), or any OS with OpenSSH (for remote management via `--ssh`)
+- systemd 246+ with `systemctl` on `PATH` (local host, or remote host when using `--ssh`)
+- OpenSSL/libssl (for remote management via `--ssh`)
 
 ## License
 

@@ -15,14 +15,17 @@ use crossterm::{
 };
 use ratatui::{prelude::*, Terminal};
 
+use std::sync::Arc;
+
 use app::App;
-use service::SshConnection;
+use service::{validate_systemctl_version, CommandRunner, LocalRunner, SshRunner};
 
 const LIVE_TAIL_REFRESH_INTERVAL: Duration = Duration::from_millis(500);
 
 fn main() -> io::Result<()> {
     let args: Vec<String> = std::env::args().collect();
     let mut host: Option<String> = None;
+    let mut identity_files: Vec<std::path::PathBuf> = Vec::new();
     let mut i = 1;
     while i < args.len() {
         match args[i].as_str() {
@@ -38,21 +41,33 @@ fn main() -> io::Result<()> {
                 }
                 host = Some(args[i].clone());
             }
+            "--ssh-identity-file" => {
+                i += 1;
+                if i >= args.len() {
+                    eprintln!("--ssh-identity-file requires a path");
+                    std::process::exit(1);
+                }
+                identity_files.push(std::path::PathBuf::from(&args[i]));
+            }
             arg => {
                 eprintln!("Unknown argument: {arg}");
-                eprintln!("Usage: systemdmgr [--ssh user@server] [version]");
+                eprintln!("Usage: systemdmgr [--ssh user@server] [--ssh-identity-file path] [version]");
                 std::process::exit(1);
             }
         }
         i += 1;
     }
 
-    let _ssh_connection = if let Some(ref host) = host {
+    if host.is_none() && !identity_files.is_empty() {
+        eprintln!("--ssh-identity-file requires --ssh");
+        std::process::exit(1);
+    }
+
+    let (runner, host_label): (Arc<dyn CommandRunner>, Option<String>) = if let Some(ref host) = host {
         eprintln!("Connecting to {host}...");
-        match SshConnection::establish(host) {
-            Ok(conn) => {
-                eprintln!("Connected.");
-                Some(conn)
+        match SshRunner::connect(host, identity_files) {
+            Ok(r) => {
+                (Arc::new(r), Some(host.clone()))
             }
             Err(e) => {
                 eprintln!("SSH connection failed: {e}");
@@ -60,22 +75,23 @@ fn main() -> io::Result<()> {
             }
         }
     } else {
-        None
+        (Arc::new(LocalRunner), None)
     };
 
-    let ssh_config = _ssh_connection.as_ref().map(|c| c.config.clone());
-
-    if let Some(ref conn) = _ssh_connection {
-        let control_path = conn.config.control_path.clone();
-        let host = conn.config.host.clone();
-        let default_hook = std::panic::take_hook();
-        std::panic::set_hook(Box::new(move |info| {
-            let _ = std::process::Command::new("ssh")
-                .args(["-o", &format!("ControlPath={control_path}"), "-O", "exit", &host])
-                .output();
-            let _ = std::fs::remove_file(&control_path);
-            default_hook(info);
-        }));
+    match validate_systemctl_version(runner.as_ref()) {
+        Ok(version) => {
+            if host_label.is_some() {
+                eprintln!("Connected. Remote systemd {version}.");
+            }
+        }
+        Err(e) => {
+            if let Some(host) = host_label.as_deref() {
+                eprintln!("Remote systemctl validation failed for {host}: {e}");
+            } else {
+                eprintln!("Local systemctl validation failed: {e}");
+            }
+            std::process::exit(1);
+        }
     }
 
     // Setup terminal with mouse capture
@@ -84,7 +100,7 @@ fn main() -> io::Result<()> {
     let backend = CrosstermBackend::new(stdout());
     let mut terminal = Terminal::new(backend)?;
 
-    let mut app = App::new(ssh_config);
+    let mut app = App::new(runner, host_label);
     let mut last_live_tail_refresh = Instant::now();
     let mut last_live_indicator_blink = Instant::now();
     let mut live_indicator_on = true;

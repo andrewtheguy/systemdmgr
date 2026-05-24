@@ -10,3 +10,5 @@ After making any code updates, always run:
 2. `cargo test` - Run the test suite
 
 Fix any issues found before considering the task complete.
+
+- no cargo fmt

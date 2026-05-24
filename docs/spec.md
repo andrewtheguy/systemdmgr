@@ -9,6 +9,7 @@ systemdmgr is a terminal UI (TUI) for browsing, inspecting, and managing systemd
 - TUI framework: [ratatui](https://ratatui.rs/)
 - Terminal backend: [crossterm](https://docs.rs/crossterm/)
 - Data source: `systemctl` and `journalctl` CLI commands (JSON output)
+- Minimum systemd version: 246
 
 ## Architecture
 
@@ -25,12 +26,16 @@ src/
 ### Remote Management (SSH)
 
 - Enabled via `--ssh user@server` CLI flag
-- Uses OpenSSH ControlMaster for connection multiplexing — authenticates once interactively before TUI starts, reuses the persistent connection for all subsequent commands
-- All `systemctl`/`journalctl` commands are transparently wrapped as `ssh -o ControlPath=<sock> <host> <program> [args...]`
+- Uses the `ssh2` crate (libssh2 bindings) — no dependency on the system `ssh` binary
+- A single TCP connection is opened and reused for all commands via `ssh2::Session`
+- Reads `~/.ssh/config` for Host aliases, HostName, Port, User, and IdentityFile
+- Supports `--ssh-identity-file` for explicit unencrypted private key files
+- Authentication via none, SSH agent, unencrypted key files, hostbased auth, keyboard-interactive prompts such as OTP/MFA, or password prompts
+- Remote target must have systemd 246+ with `systemctl` on `PATH`
 - Both system and user (`--user`) mode supported over SSH
 - Header displays remote host (e.g., `"SystemD Services [System] on user@server"`)
-- Connection cleanup via `Drop` on normal exit and panic hook on crashes
-- No additional dependencies — uses the system's `ssh` binary via `std::process::Command`
+- Connection cleanup via `Drop` on normal exit
+- See [ssh.md](ssh.md) for full details
 
 ## UI Layout
 
