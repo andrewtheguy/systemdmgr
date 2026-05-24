@@ -1,6 +1,6 @@
 [package]
 name = "systemdmgr"
-version = "0.0.6"
+version = "0.0.7"
 edition = "2024"
 
 [dependencies]
@@ -11,4 +11,4 @@ serde_json = "1.0"
 chrono = "0.4"
 unicode-width = "0.2"
 ssh2 = "0.9.5"
-ssh2-config = { git = "https://github.com/veeso/ssh2-config", default-features = false }
+ssh2-config = { git = "https://github.com/veeso/ssh2-config", rev = "3a9935222aa98a3374701eae2d283a6af74cdba8", default-features = false }

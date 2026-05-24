@@ -1284,7 +1284,7 @@ dependencies = [
 [[package]]
 name = "ssh2-config"
 version = "0.7.1"
-source = "git+https://github.com/veeso/ssh2-config#3a9935222aa98a3374701eae2d283a6af74cdba8"
+source = "git+https://github.com/veeso/ssh2-config?rev=3a9935222aa98a3374701eae2d283a6af74cdba8#3a9935222aa98a3374701eae2d283a6af74cdba8"
 dependencies = [
  "bitflags 2.10.0",
  "dirs",
@@ -1351,7 +1351,7 @@ dependencies = [
 
 [[package]]
 name = "systemdmgr"
-version = "0.0.6"
+version = "0.0.7"
 dependencies = [
  "chrono",
  "crossterm",
