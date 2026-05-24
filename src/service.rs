@@ -5,104 +5,233 @@ use ratatui::style::Color;
 pub const COLOR_MUTED: Color = Color::Rgb(100, 100, 100);
 use serde::Deserialize;
 use std::collections::HashMap;
+use std::io::Read as _;
+use std::net::TcpStream;
 use std::process::{Command, Stdio};
+use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-#[derive(Debug, Clone)]
-pub struct SshConfig {
-    pub host: String,
-    pub control_path: String,
+pub struct CommandOutput {
+    pub success: bool,
+    pub stdout: Vec<u8>,
+    pub stderr: Vec<u8>,
 }
 
-pub struct SshConnection {
-    pub config: SshConfig,
-    master_process: std::process::Child,
+pub trait CommandRunner: Send + Sync {
+    fn run(&self, program: &str, args: &[&str]) -> Result<CommandOutput, String>;
 }
 
-impl SshConnection {
-    pub fn establish(host: &str) -> Result<Self, String> {
-        let control_path = format!("/tmp/systemdmgr-ssh-{}.sock", std::process::id());
-        let child = Command::new("ssh")
-            .args([
-                "-o", "ControlMaster=yes",
-                "-o", &format!("ControlPath={control_path}"),
-                "-o", "ControlPersist=no",
-                "-o", "ServerAliveInterval=60",
-                "-N",
-                host,
-            ])
-            .spawn()
-            .map_err(|e| format!("Failed to spawn ssh: {e}"))?;
+pub struct LocalRunner;
 
-        let start = std::time::Instant::now();
-        let timeout = std::time::Duration::from_secs(60);
-        loop {
-            if std::path::Path::new(&control_path).exists() {
-                break;
-            }
-            if start.elapsed() > timeout {
-                let mut child = child;
-                let _ = child.kill();
-                let _ = child.wait();
-                return Err("SSH connection timed out".to_string());
-            }
-            std::thread::sleep(std::time::Duration::from_millis(100));
-        }
-
-        Ok(SshConnection {
-            config: SshConfig {
-                host: host.to_string(),
-                control_path,
-            },
-            master_process: child,
+impl CommandRunner for LocalRunner {
+    fn run(&self, program: &str, args: &[&str]) -> Result<CommandOutput, String> {
+        let output = Command::new(program)
+            .stdin(Stdio::null())
+            .args(args)
+            .output()
+            .map_err(|e| format!("Failed to execute {}: {}", program, e))?;
+        Ok(CommandOutput {
+            success: output.status.success(),
+            stdout: output.stdout,
+            stderr: output.stderr,
         })
     }
 }
 
-impl Drop for SshConnection {
-    fn drop(&mut self) {
-        let _ = Command::new("ssh")
-            .stdin(Stdio::null())
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .args([
-                "-o", &format!("ControlPath={}", self.config.control_path),
-                "-O", "exit",
-                &self.config.host,
-            ])
-            .output();
-        let _ = self.master_process.kill();
-        let _ = self.master_process.wait();
-        let _ = std::fs::remove_file(&self.config.control_path);
+pub struct SshRunner {
+    session: Arc<Mutex<ssh2::Session>>,
+}
+
+fn shell_quote(arg: &str) -> String {
+    if arg.is_empty() {
+        return "''".to_string();
+    }
+    if arg.bytes().all(|b| b.is_ascii_alphanumeric() || b"@._+:/-=".contains(&b)) {
+        return arg.to_string();
+    }
+    format!("'{}'", arg.replace('\'', "'\\''"))
+}
+
+impl SshRunner {
+    pub fn connect(host: &str) -> Result<Self, String> {
+        let parsed = SshHostConfig::resolve(host)?;
+
+        let addr = format!("{}:{}", parsed.hostname, parsed.port);
+        let tcp = TcpStream::connect(&addr)
+            .map_err(|e| format!("Failed to connect to {}: {}", addr, e))?;
+
+        let mut session = ssh2::Session::new()
+            .map_err(|e| format!("Failed to create SSH session: {}", e))?;
+        session.set_tcp_stream(tcp);
+        session.handshake()
+            .map_err(|e| format!("SSH handshake failed: {}", e))?;
+        session.set_keepalive(true, 60);
+
+        if session.userauth_agent(&parsed.user).is_err() {
+            let home = std::env::var("HOME").unwrap_or_default();
+            let default_keys: Vec<std::path::PathBuf> = ["id_ed25519", "id_rsa", "id_ecdsa"]
+                .iter()
+                .map(|k| std::path::PathBuf::from(format!("{}/.ssh/{}", home, k)))
+                .collect();
+            let candidates = if parsed.identity_files.is_empty() {
+                &default_keys
+            } else {
+                &parsed.identity_files
+            };
+            let mut authed = false;
+            for path in candidates {
+                if path.exists()
+                    && session.userauth_pubkey_file(&parsed.user, None, path, None).is_ok()
+                {
+                    authed = true;
+                    break;
+                }
+            }
+            if !authed && !session.authenticated() {
+                return Err("SSH authentication failed: no suitable key found".to_string());
+            }
+        }
+
+        if !session.authenticated() {
+            return Err("SSH authentication failed".to_string());
+        }
+
+        Ok(SshRunner {
+            session: Arc::new(Mutex::new(session)),
+        })
+    }
+
+}
+
+impl CommandRunner for SshRunner {
+    fn run(&self, program: &str, args: &[&str]) -> Result<CommandOutput, String> {
+        let session = self.session.lock()
+            .map_err(|e| format!("Session lock poisoned: {}", e))?;
+        let mut channel = session.channel_session()
+            .map_err(|e| format!("Failed to open SSH channel: {}", e))?;
+
+        let cmd = std::iter::once(program)
+            .chain(args.iter().map(|a| a as &str))
+            .map(shell_quote)
+            .collect::<Vec<_>>()
+            .join(" ");
+
+        channel.exec(&cmd)
+            .map_err(|e| format!("Failed to execute command: {}", e))?;
+
+        let mut stdout = Vec::new();
+        channel.read_to_end(&mut stdout)
+            .map_err(|e| format!("Failed to read stdout: {}", e))?;
+
+        let mut stderr = Vec::new();
+        channel.stderr().read_to_end(&mut stderr)
+            .map_err(|e| format!("Failed to read stderr: {}", e))?;
+
+        channel.wait_close()
+            .map_err(|e| format!("Failed to close channel: {}", e))?;
+        let exit_status = channel.exit_status().unwrap_or(-1);
+
+        Ok(CommandOutput {
+            success: exit_status == 0,
+            stdout,
+            stderr,
+        })
     }
 }
 
-fn non_interactive_command(program: &str, ssh: Option<&SshConfig>) -> Command {
-    match ssh {
-        None => {
-            let mut cmd = Command::new(program);
-            cmd.stdin(Stdio::null());
-            cmd
+struct SshHostConfig {
+    hostname: String,
+    port: u16,
+    user: String,
+    identity_files: Vec<std::path::PathBuf>,
+}
+
+impl SshHostConfig {
+    fn resolve(host: &str) -> Result<Self, String> {
+        let (cli_user, rest) = if let Some((u, r)) = host.split_once('@') {
+            (Some(u.to_string()), r)
+        } else {
+            (None, host)
+        };
+
+        let (host_alias, cli_port) = if let Some((h, p)) = rest.rsplit_once(':') {
+            (h, Some(p.parse::<u16>().map_err(|_| format!("Invalid port: {}", p))?))
+        } else {
+            (rest, None)
+        };
+
+        let default_user = std::env::var("USER").unwrap_or_else(|_| "root".to_string());
+        let home = std::env::var("HOME").unwrap_or_default();
+
+        let mut config = SshHostConfig {
+            hostname: host_alias.to_string(),
+            port: cli_port.unwrap_or(22),
+            user: cli_user.unwrap_or(default_user),
+            identity_files: Vec::new(),
+        };
+
+        let config_path = format!("{}/.ssh/config", home);
+        if let Ok(content) = std::fs::read_to_string(&config_path) {
+            config.apply_ssh_config(&content, host_alias, cli_port.is_some());
         }
-        Some(config) => {
-            let mut cmd = Command::new("ssh");
-            cmd.stdin(Stdio::null());
-            cmd.args(["-o", &format!("ControlPath={}", config.control_path)]);
-            cmd.arg(&config.host);
-            cmd.arg(program);
-            cmd
+
+        Ok(config)
+    }
+
+    fn apply_ssh_config(&mut self, content: &str, host_alias: &str, has_cli_port: bool) {
+        let mut in_matching_block = false;
+        let home = std::env::var("HOME").unwrap_or_default();
+
+        for line in content.lines() {
+            let line = line.trim();
+            if line.is_empty() || line.starts_with('#') {
+                continue;
+            }
+
+            let (key, value) = match line.split_once(char::is_whitespace) {
+                Some((k, v)) => (k, v.trim()),
+                None => continue,
+            };
+
+            if key.eq_ignore_ascii_case("Host") {
+                in_matching_block = value.split_whitespace().any(|pat| {
+                    if pat == "*" { true } else { pat == host_alias }
+                });
+                continue;
+            }
+
+            if !in_matching_block {
+                continue;
+            }
+
+            if key.eq_ignore_ascii_case("HostName") {
+                self.hostname = value.to_string();
+            } else if key.eq_ignore_ascii_case("Port") && !has_cli_port {
+                if let Ok(p) = value.parse::<u16>() {
+                    self.port = p;
+                }
+            } else if key.eq_ignore_ascii_case("User") {
+                self.user = value.to_string();
+            } else if key.eq_ignore_ascii_case("IdentityFile") {
+                let expanded = if let Some(rest) = value.strip_prefix("~/") {
+                    format!("{}/{}", home, rest)
+                } else {
+                    value.to_string()
+                };
+                self.identity_files.push(std::path::PathBuf::from(expanded));
+            }
         }
     }
 }
 
-fn systemctl_command(ssh: Option<&SshConfig>) -> Command {
-    let mut cmd = non_interactive_command("systemctl", ssh);
-    cmd.arg("--no-ask-password");
-    cmd
+fn run_systemctl(runner: &dyn CommandRunner, extra_args: &[&str]) -> Result<CommandOutput, String> {
+    let mut args = vec!["--no-ask-password"];
+    args.extend_from_slice(extra_args);
+    runner.run("systemctl", &args)
 }
 
-fn journalctl_command(ssh: Option<&SshConfig>) -> Command {
-    non_interactive_command("journalctl", ssh)
+fn run_journalctl(runner: &dyn CommandRunner, args: &[&str]) -> Result<CommandOutput, String> {
+    runner.run("journalctl", args)
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -330,7 +459,7 @@ impl UnitAction {
     }
 }
 
-pub fn execute_unit_action(action: UnitAction, unit_name: &str, user_mode: bool, ssh: Option<&SshConfig>) -> Result<String, String> {
+pub fn execute_unit_action(action: UnitAction, unit_name: &str, user_mode: bool, runner: &dyn CommandRunner) -> Result<String, String> {
     let mut args = Vec::new();
     if user_mode {
         args.push("--user");
@@ -340,12 +469,9 @@ pub fn execute_unit_action(action: UnitAction, unit_name: &str, user_mode: bool,
         args.push(unit_name);
     }
 
-    let output = systemctl_command(ssh)
-        .args(&args)
-        .output()
-        .map_err(|e| format!("Failed to execute systemctl: {}", e))?;
+    let output = run_systemctl(runner, &args)?;
 
-    if output.status.success() {
+    if output.success {
         Ok(format!("{} succeeded for {}", action.label(), unit_name))
     } else {
         let stderr = String::from_utf8_lossy(&output.stderr).to_string();
@@ -417,7 +543,7 @@ pub fn fetch_log_entries(
     user_mode: bool,
     priority: Option<u8>,
     time_range: TimeRange,
-    ssh: Option<&SshConfig>,
+    runner: &dyn CommandRunner,
 ) -> Result<Vec<LogEntry>, String> {
     let lines_str = lines.to_string();
     let mut args = vec!["-n", &lines_str, "--no-pager", "--output=json"];
@@ -441,10 +567,7 @@ pub fn fetch_log_entries(
         args.push(&since_value);
     }
 
-    let output = journalctl_command(ssh)
-        .args(&args)
-        .output()
-        .map_err(|e| format!("Failed to execute journalctl: {}", e))?;
+    let output = run_journalctl(runner, &args)?;
 
     let entries = String::from_utf8_lossy(&output.stdout)
         .lines()
@@ -461,7 +584,7 @@ pub fn fetch_log_entries_after_cursor(
     user_mode: bool,
     priority: Option<u8>,
     time_range: TimeRange,
-    ssh: Option<&SshConfig>,
+    runner: &dyn CommandRunner,
 ) -> Result<Vec<LogEntry>, String> {
     let after_cursor = format!("--after-cursor={}", cursor);
     let mut args = vec![&*after_cursor, "--no-pager", "--output=json"];
@@ -485,10 +608,7 @@ pub fn fetch_log_entries_after_cursor(
         args.push(&since_value);
     }
 
-    let output = journalctl_command(ssh)
-        .args(&args)
-        .output()
-        .map_err(|e| format!("Failed to execute journalctl: {}", e))?;
+    let output = run_journalctl(runner, &args)?;
 
     let entries = String::from_utf8_lossy(&output.stdout)
         .lines()
@@ -568,19 +688,16 @@ pub fn format_log_timestamp(timestamp_us: i64) -> String {
     }
 }
 
-pub fn fetch_units(unit_type: UnitType, user_mode: bool, ssh: Option<&SshConfig>) -> Result<Vec<SystemdUnit>, String> {
+pub fn fetch_units(unit_type: UnitType, user_mode: bool, runner: &dyn CommandRunner) -> Result<Vec<SystemdUnit>, String> {
     let mut args = Vec::new();
     if user_mode {
         args.push("--user");
     }
     let type_arg = format!("--type={}", unit_type.systemctl_type());
     args.extend(["list-units", &type_arg, "--all", "--no-pager", "--output=json"]);
-    let output = systemctl_command(ssh)
-        .args(&args)
-        .output()
-        .map_err(|e| format!("Failed to execute systemctl: {}", e))?;
+    let output = run_systemctl(runner, &args)?;
 
-    if !output.status.success() {
+    if !output.success {
         return Err(format!(
             "systemctl failed: {}",
             String::from_utf8_lossy(&output.stderr)
@@ -591,12 +708,12 @@ pub fn fetch_units(unit_type: UnitType, user_mode: bool, ssh: Option<&SshConfig>
         .map_err(|e| format!("Failed to parse JSON: {}", e))?;
 
     match unit_type {
-        UnitType::Timer => merge_timer_details(&mut units, user_mode, ssh),
-        UnitType::Socket => merge_socket_details(&mut units, user_mode, ssh),
+        UnitType::Timer => merge_timer_details(&mut units, user_mode, runner),
+        UnitType::Socket => merge_socket_details(&mut units, user_mode, runner),
         _ => {}
     }
 
-    merge_file_states(&mut units, unit_type, user_mode, ssh);
+    merge_file_states(&mut units, unit_type, user_mode, runner);
 
     Ok(units)
 }
@@ -607,17 +724,17 @@ struct TimerEntry {
     next: u64,
 }
 
-fn merge_timer_details(units: &mut [SystemdUnit], user_mode: bool, ssh: Option<&SshConfig>) {
+fn merge_timer_details(units: &mut [SystemdUnit], user_mode: bool, runner: &dyn CommandRunner) {
     let mut args = Vec::new();
     if user_mode {
         args.push("--user");
     }
     args.extend(["list-timers", "--all", "--no-pager", "--output=json"]);
 
-    let Ok(output) = systemctl_command(ssh).args(&args).output() else {
+    let Ok(output) = run_systemctl(runner, &args) else {
         return;
     };
-    if !output.status.success() {
+    if !output.success {
         return;
     }
 
@@ -672,17 +789,17 @@ struct SocketEntry {
     listen: String,
 }
 
-fn merge_socket_details(units: &mut [SystemdUnit], user_mode: bool, ssh: Option<&SshConfig>) {
+fn merge_socket_details(units: &mut [SystemdUnit], user_mode: bool, runner: &dyn CommandRunner) {
     let mut args = Vec::new();
     if user_mode {
         args.push("--user");
     }
     args.extend(["list-sockets", "--all", "--no-pager", "--output=json"]);
 
-    let Ok(output) = systemctl_command(ssh).args(&args).output() else {
+    let Ok(output) = run_systemctl(runner, &args) else {
         return;
     };
-    if !output.status.success() {
+    if !output.success {
         return;
     }
 
@@ -705,7 +822,7 @@ struct UnitFileEntry {
     state: String,
 }
 
-fn fetch_unit_file_states(unit_type: UnitType, user_mode: bool, ssh: Option<&SshConfig>) -> HashMap<String, String> {
+fn fetch_unit_file_states(unit_type: UnitType, user_mode: bool, runner: &dyn CommandRunner) -> HashMap<String, String> {
     let mut args = Vec::new();
     if user_mode {
         args.push("--user");
@@ -713,10 +830,10 @@ fn fetch_unit_file_states(unit_type: UnitType, user_mode: bool, ssh: Option<&Ssh
     let type_arg = format!("--type={}", unit_type.systemctl_type());
     args.extend(["list-unit-files", &type_arg, "--no-pager", "--output=json"]);
 
-    let Ok(output) = systemctl_command(ssh).args(&args).output() else {
+    let Ok(output) = run_systemctl(runner, &args) else {
         return HashMap::new();
     };
-    if !output.status.success() {
+    if !output.success {
         return HashMap::new();
     }
 
@@ -740,8 +857,8 @@ fn fetch_unit_file_states(unit_type: UnitType, user_mode: bool, ssh: Option<&Ssh
         .collect()
 }
 
-fn merge_file_states(units: &mut [SystemdUnit], unit_type: UnitType, user_mode: bool, ssh: Option<&SshConfig>) {
-    let states = fetch_unit_file_states(unit_type, user_mode, ssh);
+fn merge_file_states(units: &mut [SystemdUnit], unit_type: UnitType, user_mode: bool, runner: &dyn CommandRunner) {
+    let states = fetch_unit_file_states(unit_type, user_mode, runner);
     for unit in units.iter_mut() {
         if let Some(state) = states.get(&unit.unit) {
             unit.file_state = Some(state.clone());
@@ -769,17 +886,17 @@ fn parse_timer_specs(raw: &str) -> Vec<String> {
         .collect()
 }
 
-pub fn fetch_unit_properties(unit_name: &str, user_mode: bool, ssh: Option<&SshConfig>) -> UnitProperties {
+pub fn fetch_unit_properties(unit_name: &str, user_mode: bool, runner: &dyn CommandRunner) -> UnitProperties {
     let mut args = Vec::new();
     if user_mode {
         args.push("--user");
     }
     args.extend(["show", unit_name, "--no-pager"]);
 
-    let Ok(output) = systemctl_command(ssh).args(&args).output() else {
+    let Ok(output) = run_systemctl(runner, &args) else {
         return UnitProperties::default();
     };
-    if !output.status.success() {
+    if !output.success {
         return UnitProperties::default();
     }
 
@@ -850,18 +967,16 @@ pub fn fetch_unit_properties(unit_name: &str, user_mode: bool, ssh: Option<&SshC
     }
 }
 
-pub fn fetch_unit_file_content(unit: &str, user_mode: bool, ssh: Option<&SshConfig>) -> Result<Vec<String>, String> {
+pub fn fetch_unit_file_content(unit: &str, user_mode: bool, runner: &dyn CommandRunner) -> Result<Vec<String>, String> {
     let mut args = Vec::new();
     if user_mode {
         args.push("--user");
     }
     args.extend(["cat", unit, "--no-pager"]);
-    let mut cmd = systemctl_command(ssh);
-    cmd.args(&args);
 
-    let output = cmd.output().map_err(|e| format!("Failed to run systemctl cat: {}", e))?;
+    let output = run_systemctl(runner, &args)?;
 
-    if !output.status.success() {
+    if !output.success {
         let stderr = String::from_utf8_lossy(&output.stderr);
         return Err(format!("systemctl cat failed: {}", stderr.trim()));
     }

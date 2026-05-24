@@ -54,9 +54,9 @@ Manage systemd units on a remote server over SSH:
 systemdmgr --ssh user@server
 ```
 
-The SSH connection authenticates once interactively (password, 2FA, agent keys all work) and reuses the connection for all subsequent commands via OpenSSH ControlMaster. The host can be any valid SSH destination, including `~/.ssh/config` aliases.
+Authenticates via SSH agent or key files and reuses a single connection for all commands. Supports `~/.ssh/config` Host aliases, custom ports, and identity files. `--user` mode works over SSH (requires `loginctl enable-linger` on the remote).
 
-`--user` mode is supported over SSH (requires `loginctl enable-linger` on the remote).
+See [docs/ssh.md](docs/ssh.md) for full details on host resolution, authentication, and troubleshooting.
 
 ### Version
 
@@ -113,12 +113,14 @@ Press `?` in the app to see context-sensitive help.
 ## Documentation
 
 - [Specification](docs/spec.md) — architecture, features, and UI details
+- [SSH Remote Management](docs/ssh.md) — host resolution, authentication, and troubleshooting
 - [Roadmap](docs/roadmap.md) — planned features and future considerations
 
 ## Requirements
 
 - Rust 1.85+ (2024 edition)
-- Linux with systemd (for local management), or any OS with OpenSSH (for remote management via `--ssh`)
+- Linux with systemd (for local management)
+- OpenSSL/libssl (for remote management via `--ssh`)
 
 ## License
 

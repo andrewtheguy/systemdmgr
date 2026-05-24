@@ -25,12 +25,14 @@ src/
 ### Remote Management (SSH)
 
 - Enabled via `--ssh user@server` CLI flag
-- Uses OpenSSH ControlMaster for connection multiplexing — authenticates once interactively before TUI starts, reuses the persistent connection for all subsequent commands
-- All `systemctl`/`journalctl` commands are transparently wrapped as `ssh -o ControlPath=<sock> <host> <program> [args...]`
+- Uses the `ssh2` crate (libssh2 bindings) — no dependency on the system `ssh` binary
+- A single TCP connection is opened and reused for all commands via `ssh2::Session`
+- Reads `~/.ssh/config` for Host aliases, HostName, Port, User, and IdentityFile
+- Authentication via SSH agent or key files (password auth not supported)
 - Both system and user (`--user`) mode supported over SSH
 - Header displays remote host (e.g., `"SystemD Services [System] on user@server"`)
-- Connection cleanup via `Drop` on normal exit and panic hook on crashes
-- No additional dependencies — uses the system's `ssh` binary via `std::process::Command`
+- Connection cleanup via `Drop` on normal exit
+- See [ssh.md](ssh.md) for full details
 
 ## UI Layout
 

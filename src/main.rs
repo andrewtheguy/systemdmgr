@@ -15,8 +15,10 @@ use crossterm::{
 };
 use ratatui::{prelude::*, Terminal};
 
+use std::sync::Arc;
+
 use app::App;
-use service::SshConnection;
+use service::{CommandRunner, LocalRunner, SshRunner};
 
 const LIVE_TAIL_REFRESH_INTERVAL: Duration = Duration::from_millis(500);
 
@@ -47,12 +49,12 @@ fn main() -> io::Result<()> {
         i += 1;
     }
 
-    let _ssh_connection = if let Some(ref host) = host {
+    let (runner, host_label): (Arc<dyn CommandRunner>, Option<String>) = if let Some(ref host) = host {
         eprintln!("Connecting to {host}...");
-        match SshConnection::establish(host) {
-            Ok(conn) => {
+        match SshRunner::connect(host) {
+            Ok(r) => {
                 eprintln!("Connected.");
-                Some(conn)
+                (Arc::new(r), Some(host.clone()))
             }
             Err(e) => {
                 eprintln!("SSH connection failed: {e}");
@@ -60,23 +62,8 @@ fn main() -> io::Result<()> {
             }
         }
     } else {
-        None
+        (Arc::new(LocalRunner), None)
     };
-
-    let ssh_config = _ssh_connection.as_ref().map(|c| c.config.clone());
-
-    if let Some(ref conn) = _ssh_connection {
-        let control_path = conn.config.control_path.clone();
-        let host = conn.config.host.clone();
-        let default_hook = std::panic::take_hook();
-        std::panic::set_hook(Box::new(move |info| {
-            let _ = std::process::Command::new("ssh")
-                .args(["-o", &format!("ControlPath={control_path}"), "-O", "exit", &host])
-                .output();
-            let _ = std::fs::remove_file(&control_path);
-            default_hook(info);
-        }));
-    }
 
     // Setup terminal with mouse capture
     enable_raw_mode()?;
@@ -84,7 +71,7 @@ fn main() -> io::Result<()> {
     let backend = CrosstermBackend::new(stdout());
     let mut terminal = Terminal::new(backend)?;
 
-    let mut app = App::new(ssh_config);
+    let mut app = App::new(runner, host_label);
     let mut last_live_tail_refresh = Instant::now();
     let mut last_live_indicator_blink = Instant::now();
     let mut live_indicator_on = true;
