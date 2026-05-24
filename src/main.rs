@@ -110,15 +110,15 @@ fn main() -> io::Result<()> {
                 continue;
             }
 
-            // Help overlay: scroll with j/k/arrows/PgUp/PgDn/g/G; close with Esc/q
+            // Help overlay: scroll with arrows/PgUp/PgDn/g/G; close with Esc/q
             if app.show_help {
                 let viewport = app.help_viewport_lines.max(1);
                 match key.code {
                     KeyCode::Esc | KeyCode::Char('q') | KeyCode::Enter => {
                         app.show_help = false;
                     }
-                    KeyCode::Down | KeyCode::Char('j') => app.help_scroll_down(1),
-                    KeyCode::Up | KeyCode::Char('k') => app.help_scroll_up(1),
+                    KeyCode::Down => app.help_scroll_down(1),
+                    KeyCode::Up => app.help_scroll_up(1),
                     KeyCode::PageDown | KeyCode::Char(' ') => {
                         app.help_scroll_down(viewport)
                     }
@@ -134,8 +134,8 @@ fn main() -> io::Result<()> {
             if app.show_status_picker {
                 match key.code {
                     KeyCode::Esc | KeyCode::Char('s') => app.close_status_picker(),
-                    KeyCode::Down | KeyCode::Char('j') => app.status_picker_next(),
-                    KeyCode::Up | KeyCode::Char('k') => app.status_picker_previous(),
+                    KeyCode::Down => app.status_picker_next(),
+                    KeyCode::Up => app.status_picker_previous(),
                     KeyCode::Enter => app.status_picker_confirm(),
                     _ => {}
                 }
@@ -146,8 +146,8 @@ fn main() -> io::Result<()> {
             if app.show_type_picker {
                 match key.code {
                     KeyCode::Esc | KeyCode::Char('t') => app.close_type_picker(),
-                    KeyCode::Down | KeyCode::Char('j') => app.type_picker_next(),
-                    KeyCode::Up | KeyCode::Char('k') => app.type_picker_previous(),
+                    KeyCode::Down => app.type_picker_next(),
+                    KeyCode::Up => app.type_picker_previous(),
                     KeyCode::Enter => app.type_picker_confirm(),
                     _ => {}
                 }
@@ -158,8 +158,8 @@ fn main() -> io::Result<()> {
             if app.show_priority_picker {
                 match key.code {
                     KeyCode::Esc | KeyCode::Char('p') => app.close_priority_picker(),
-                    KeyCode::Down | KeyCode::Char('j') => app.priority_picker_next(),
-                    KeyCode::Up | KeyCode::Char('k') => app.priority_picker_previous(),
+                    KeyCode::Down => app.priority_picker_next(),
+                    KeyCode::Up => app.priority_picker_previous(),
                     KeyCode::Enter => app.priority_picker_confirm(),
                     _ => {}
                 }
@@ -170,8 +170,8 @@ fn main() -> io::Result<()> {
             if app.show_time_picker {
                 match key.code {
                     KeyCode::Esc | KeyCode::Char('T') => app.close_time_picker(),
-                    KeyCode::Down | KeyCode::Char('j') => app.time_picker_next(),
-                    KeyCode::Up | KeyCode::Char('k') => app.time_picker_previous(),
+                    KeyCode::Down => app.time_picker_next(),
+                    KeyCode::Up => app.time_picker_previous(),
                     KeyCode::Enter => app.time_picker_confirm(),
                     _ => {}
                 }
@@ -182,8 +182,8 @@ fn main() -> io::Result<()> {
             if app.show_file_state_picker {
                 match key.code {
                     KeyCode::Esc | KeyCode::Char('f') => app.close_file_state_picker(),
-                    KeyCode::Down | KeyCode::Char('j') => app.file_state_picker_next(),
-                    KeyCode::Up | KeyCode::Char('k') => app.file_state_picker_previous(),
+                    KeyCode::Down => app.file_state_picker_next(),
+                    KeyCode::Up => app.file_state_picker_previous(),
                     KeyCode::Enter => app.file_state_picker_confirm(),
                     _ => {}
                 }
@@ -194,8 +194,8 @@ fn main() -> io::Result<()> {
             if app.show_action_picker {
                 match key.code {
                     KeyCode::Esc | KeyCode::Char('x') => app.close_action_picker(),
-                    KeyCode::Down | KeyCode::Char('j') => app.action_picker_next(),
-                    KeyCode::Up | KeyCode::Char('k') => app.action_picker_previous(),
+                    KeyCode::Down => app.action_picker_next(),
+                    KeyCode::Up => app.action_picker_previous(),
                     KeyCode::Enter => app.action_picker_confirm(),
                     KeyCode::Char(c) => {
                         if let Some(idx) = app.available_actions.iter().position(|a| a.shortcut() == c) {
@@ -231,8 +231,8 @@ fn main() -> io::Result<()> {
                 let content_height = app.detail_content_height;
                 match key.code {
                     KeyCode::Esc | KeyCode::Char('i') | KeyCode::Enter => app.close_details(),
-                    KeyCode::Down | KeyCode::Char('j') => app.detail_scroll_down(1, content_height, visible),
-                    KeyCode::Up | KeyCode::Char('k') => app.detail_scroll_up(1),
+                    KeyCode::Down => app.detail_scroll_down(1, content_height, visible),
+                    KeyCode::Up => app.detail_scroll_up(1),
                     KeyCode::Char('g') | KeyCode::Home => { app.detail_scroll = 0; }
                     KeyCode::Char('G') | KeyCode::End => app.detail_scroll_down(usize::MAX, content_height, visible),
                     KeyCode::PageDown => app.detail_scroll_down(10, content_height, visible),
@@ -316,10 +316,10 @@ fn main() -> io::Result<()> {
                     KeyCode::Char('N') => {
                         app.prev_unit_file_match(visible_unit_file_lines);
                     }
-                    KeyCode::Char('j') | KeyCode::Down => {
+                    KeyCode::Down => {
                         app.scroll_unit_file_down(1);
                     }
-                    KeyCode::Char('k') | KeyCode::Up => {
+                    KeyCode::Up => {
                         app.scroll_unit_file_up(1);
                     }
                     KeyCode::Char('g') | KeyCode::Home => {
@@ -400,14 +400,14 @@ fn main() -> io::Result<()> {
                     KeyCode::Char('N') => {
                         app.prev_log_match(visible_lines);
                     }
-                    KeyCode::Char('j') | KeyCode::Down => {
+                    KeyCode::Down => {
                         if app.log_selected_entry.is_some() {
                             app.log_select_next();
                         } else {
                             app.scroll_logs_down(1);
                         }
                     }
-                    KeyCode::Char('k') | KeyCode::Up => {
+                    KeyCode::Up => {
                         if app.log_selected_entry.is_some() {
                             app.log_select_previous();
                         } else {
@@ -480,10 +480,10 @@ fn main() -> io::Result<()> {
                     KeyCode::Char('/') => {
                         app.search_mode = true;
                     }
-                    KeyCode::Char('j') | KeyCode::Down => {
+                    KeyCode::Down => {
                         app.next();
                     }
-                    KeyCode::Char('k') | KeyCode::Up => {
+                    KeyCode::Up => {
                         app.previous();
                     }
                     KeyCode::Char('g') | KeyCode::Home => {

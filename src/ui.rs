@@ -653,7 +653,7 @@ pub fn render(frame: &mut Frame, app: &mut App, live_indicator_on: bool) {
     let content_width = chunks[2].width.saturating_sub(2) as usize; // subtract borders
 
     let (segments, suffix): (&[&str], &str) = if app.show_help {
-        (&["j/k: Scroll", "g/G: Top/Bottom", "PgUp/PgDn: Page"], "Esc/q: Close")
+        (&["\u{2191}/\u{2193}: Scroll", "g/G: Top/Bottom", "PgUp/PgDn: Page"], "Esc/q: Close")
     } else if app.show_confirm && app.action_in_progress {
         (&[], "Executing...")
     } else if app.show_confirm && app.action_result.is_some() {
@@ -661,38 +661,38 @@ pub fn render(frame: &mut Frame, app: &mut App, live_indicator_on: bool) {
     } else if app.show_confirm {
         (&[], "Y: Confirm | N/Esc: Cancel")
     } else if app.show_action_picker {
-        (&["j/k: Navigate", "Enter/shortcut: Select", "Esc/x: Close"], "?: Help")
+        (&["\u{2191}/\u{2193}: Navigate", "Enter/shortcut: Select", "Esc/x: Close"], "?: Help")
     } else if app.show_details {
-        (&["j/k: Scroll", "g/G: Top/Bottom", "PgUp/PgDn: Page", "Esc/i: Close"], "?: Help")
+        (&["\u{2191}/\u{2193}: Scroll", "g/G: Top/Bottom", "PgUp/PgDn: Page", "Esc/i: Close"], "?: Help")
     } else if app.show_status_picker {
-        (&["j/k: Navigate", "Enter: Select", "Esc/s: Close"], "?: Help")
+        (&["\u{2191}/\u{2193}: Navigate", "Enter: Select", "Esc/s: Close"], "?: Help")
     } else if app.show_type_picker {
-        (&["j/k: Navigate", "Enter: Select", "Esc/t: Close"], "?: Help")
+        (&["\u{2191}/\u{2193}: Navigate", "Enter: Select", "Esc/t: Close"], "?: Help")
     } else if app.show_priority_picker {
-        (&["j/k: Navigate", "Enter: Select", "Esc/p: Close"], "?: Help")
+        (&["\u{2191}/\u{2193}: Navigate", "Enter: Select", "Esc/p: Close"], "?: Help")
     } else if app.show_time_picker {
-        (&["j/k: Navigate", "Enter: Select", "Esc/T: Close"], "?: Help")
+        (&["\u{2191}/\u{2193}: Navigate", "Enter: Select", "Esc/T: Close"], "?: Help")
     } else if app.show_file_state_picker {
-        (&["j/k: Navigate", "Enter: Select", "Esc/f: Close"], "?: Help")
+        (&["\u{2191}/\u{2193}: Navigate", "Enter: Select", "Esc/f: Close"], "?: Help")
     } else if app.unit_file_search_mode {
         (&["Type to search unit file", "Esc/Enter: Exit search"], "?: Help & more")
     } else if app.show_unit_file && !app.unit_file_search_query.is_empty() {
-        (&["v/Esc: Back", "j/k: Scroll", "n/N: Next/Prev match", "/: Search"], "?: Help & more")
+        (&["v/Esc: Back", "\u{2191}/\u{2193}: Scroll", "n/N: Next/Prev match", "/: Search"], "?: Help & more")
     } else if app.show_unit_file {
-        (&["v/Esc: Back", "j/k: Scroll", "g/G: Top/Bottom", "/: Search"], "?: Help & more")
+        (&["v/Esc: Back", "\u{2191}/\u{2193}: Scroll", "g/G: Top/Bottom", "/: Search"], "?: Help & more")
     } else if app.log_search_mode {
         (&["Type to search logs", "Esc/Enter: Exit search"], "?: Help & more")
     } else if app.show_logs && !app.log_search_query.is_empty() {
         if app.log_paused {
-            (&["q/Esc: Back", "j/k: Scroll", "n/N: Next/Prev match", "x: Actions", "f: Resume", "L: All logs", "p: Priority", "t: Time", "/: Search"], "?: Help & more")
+            (&["q/Esc: Back", "\u{2191}/\u{2193}: Scroll", "n/N: Next/Prev match", "x: Actions", "f: Resume", "L: All logs", "p: Priority", "t: Time", "/: Search"], "?: Help & more")
         } else {
-            (&["q/Esc: Back", "j/k: Scroll", "n/N: Next/Prev match", "x: Actions", "f: Pause", "L: All logs", "p: Priority", "t: Time", "/: Search"], "?: Help & more")
+            (&["q/Esc: Back", "\u{2191}/\u{2193}: Scroll", "n/N: Next/Prev match", "x: Actions", "f: Pause", "L: All logs", "p: Priority", "t: Time", "/: Search"], "?: Help & more")
         }
     } else if app.show_logs {
         if app.log_paused {
-            (&["q/Esc: Back", "j/k: Scroll", "g/G: Top/Bottom", "x: Actions", "f: Resume", "L: All logs", "/: Search", "p: Priority", "t: Time"], "?: Help & more")
+            (&["q/Esc: Back", "\u{2191}/\u{2193}: Scroll", "g/G: Top/Bottom", "x: Actions", "f: Resume", "L: All logs", "/: Search", "p: Priority", "t: Time"], "?: Help & more")
         } else {
-            (&["q/Esc: Back", "j/k: Scroll", "g/G: Top/Bottom", "x: Actions", "f: Pause", "L: All logs", "/: Search", "p: Priority", "t: Time"], "?: Help & more")
+            (&["q/Esc: Back", "\u{2191}/\u{2193}: Scroll", "g/G: Top/Bottom", "x: Actions", "f: Pause", "L: All logs", "/: Search", "p: Priority", "t: Time"], "?: Help & more")
         }
     } else if app.search_mode {
         (&["Type to search", "Esc/Enter: Exit search"], "?: Help & more")
@@ -954,8 +954,8 @@ fn render_help(frame: &mut Frame, app: &mut App) {
         title = "Help: Actions";
         help_text.extend(vec![
             Line::from(vec![Span::styled("Navigation", section_style)]),
-            Line::from("  j / Down      Move down"),
-            Line::from("  k / Up        Move up"),
+            Line::from("  Down          Move down"),
+            Line::from("  Up            Move up"),
             Line::from("  Enter         Select action"),
             Line::from("  s/t/r/l/e/d/D Shortcut keys"),
             Line::from(""),
@@ -967,8 +967,8 @@ fn render_help(frame: &mut Frame, app: &mut App) {
         title = "Help: Details";
         help_text.extend(vec![
             Line::from(vec![Span::styled("Navigation", section_style)]),
-            Line::from("  j / Down      Scroll down"),
-            Line::from("  k / Up        Scroll up"),
+            Line::from("  Down          Scroll down"),
+            Line::from("  Up            Scroll up"),
             Line::from("  g / Home      Go to top"),
             Line::from("  G / End       Go to bottom"),
             Line::from("  PgUp / PgDn   Page scroll"),
@@ -982,8 +982,8 @@ fn render_help(frame: &mut Frame, app: &mut App) {
         title = "Help: Unit File";
         help_text.extend(vec![
             Line::from(vec![Span::styled("Navigation", section_style)]),
-            Line::from("  j / Down      Scroll down"),
-            Line::from("  k / Up        Scroll up"),
+            Line::from("  Down          Scroll down"),
+            Line::from("  Up            Scroll up"),
             Line::from("  g / Home      Go to top"),
             Line::from("  G / End       Go to bottom"),
             Line::from("  PgUp / PgDn   Page scroll"),
@@ -1002,8 +1002,8 @@ fn render_help(frame: &mut Frame, app: &mut App) {
         title = "Help: Logs";
         help_text.extend(vec![
             Line::from(vec![Span::styled("Navigation", section_style)]),
-            Line::from("  j / Down      Scroll down"),
-            Line::from("  k / Up        Scroll up"),
+            Line::from("  Down          Scroll down"),
+            Line::from("  Up            Scroll up"),
             Line::from("  g / Home      Go to top"),
             Line::from("  G / End       Go to bottom"),
             Line::from("  PgUp / PgDn   Page scroll"),
@@ -1030,8 +1030,8 @@ fn render_help(frame: &mut Frame, app: &mut App) {
         title = "Help: Unit List";
         help_text.extend(vec![
             Line::from(vec![Span::styled("Navigation", section_style)]),
-            Line::from("  j / Down      Move down"),
-            Line::from("  k / Up        Move up"),
+            Line::from("  Down          Move down"),
+            Line::from("  Up            Move up"),
             Line::from("  g / Home      Go to top"),
             Line::from("  G / End       Go to bottom"),
             Line::from("  PgUp / PgDn   Page up/down"),
