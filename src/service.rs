@@ -504,17 +504,17 @@ fn read_hidden_terminal_line() -> io::Result<String> {
         match event::read()? {
             Event::Key(key) if key.kind == KeyEventKind::Press => match key.code {
                 KeyCode::Enter => {
-                    eprintln!();
+                    eprint!("\r\n");
                     return Ok(response);
                 }
                 KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                    eprintln!();
+                    eprint!("\r\n");
                     return Err(io::Error::new(io::ErrorKind::Interrupted, "interrupted"));
                 }
                 KeyCode::Char('d')
                     if key.modifiers.contains(KeyModifiers::CONTROL) && response.is_empty() =>
                 {
-                    eprintln!();
+                    eprint!("\r\n");
                     return Err(io::Error::new(io::ErrorKind::UnexpectedEof, "end of input"));
                 }
                 KeyCode::Char(c)
