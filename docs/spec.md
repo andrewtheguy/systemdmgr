@@ -9,6 +9,7 @@ systemdmgr is a terminal UI (TUI) for browsing, inspecting, and managing systemd
 - TUI framework: [ratatui](https://ratatui.rs/)
 - Terminal backend: [crossterm](https://docs.rs/crossterm/)
 - Data source: `systemctl` and `journalctl` CLI commands (JSON output)
+- Minimum systemd version: 246
 
 ## Architecture
 
@@ -30,6 +31,7 @@ src/
 - Reads `~/.ssh/config` for Host aliases, HostName, Port, User, and IdentityFile
 - Supports `--ssh-identity-file` for explicit private key files
 - Authentication via none, SSH agent, key files, hostbased auth, keyboard-interactive prompts such as OTP/MFA, or password prompts
+- Remote target must have systemd 246+ with `systemctl` on `PATH`
 - Both system and user (`--user`) mode supported over SSH
 - Header displays remote host (e.g., `"SystemD Services [System] on user@server"`)
 - Connection cleanup via `Drop` on normal exit

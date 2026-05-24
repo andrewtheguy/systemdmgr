@@ -9,6 +9,7 @@ systemdmgr --ssh user@server
 ```
 
 The connection authenticates and enters the TUI. All `systemctl` and `journalctl` commands run transparently over the SSH session.
+The remote host must have systemd 246+ and `systemctl` on `PATH`; this is validated with `systemctl --version` after authentication.
 
 ## Connection
 

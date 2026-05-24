@@ -26,6 +26,8 @@ pub trait CommandRunner: Send + Sync {
     fn run(&self, program: &str, args: &[&str]) -> Result<CommandOutput, String>;
 }
 
+pub const MIN_SYSTEMD_VERSION: u32 = 246;
+
 pub struct LocalRunner;
 
 impl CommandRunner for LocalRunner {
@@ -41,6 +43,42 @@ impl CommandRunner for LocalRunner {
             stderr: output.stderr,
         })
     }
+}
+
+pub fn validate_systemctl_version(runner: &dyn CommandRunner) -> Result<u32, String> {
+    let output = runner.run("systemctl", &["--version"])
+        .map_err(|e| format!("systemctl was not found on PATH or could not be executed: {}", e))?;
+    if !output.success {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let detail = stderr.trim();
+        if detail.is_empty() {
+            return Err("systemctl --version failed".to_string());
+        }
+        return Err(format!("systemctl --version failed: {}", detail));
+    }
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let version = parse_systemd_version(&stdout)
+        .ok_or_else(|| "could not parse systemd version from systemctl --version".to_string())?;
+    if version < MIN_SYSTEMD_VERSION {
+        return Err(format!(
+            "systemd {} is too old; systemdmgr requires systemd {} or newer",
+            version, MIN_SYSTEMD_VERSION
+        ));
+    }
+    Ok(version)
+}
+
+fn parse_systemd_version(output: &str) -> Option<u32> {
+    let first_line = output.lines().next()?.trim();
+    let rest = first_line.strip_prefix("systemd ")?;
+    let raw_version = rest.split_whitespace().next()?;
+    let digits: String = raw_version
+        .chars()
+        .skip_while(|c| !c.is_ascii_digit())
+        .take_while(|c| c.is_ascii_digit())
+        .collect();
+    digits.parse().ok()
 }
 
 pub struct SshRunner {
@@ -1415,6 +1453,22 @@ mod tests {
             detail: None,
             file_state: None,
         }
+    }
+
+    #[test]
+    fn test_parse_systemd_version() {
+        let output = "systemd 257 (257.13-1~deb13u1)\n+PAM +OPENSSL\n";
+        assert_eq!(parse_systemd_version(output), Some(257));
+    }
+
+    #[test]
+    fn test_parse_systemd_version_with_prefixed_number() {
+        assert_eq!(parse_systemd_version("systemd v246\n"), Some(246));
+    }
+
+    #[test]
+    fn test_parse_systemd_version_invalid() {
+        assert_eq!(parse_systemd_version("not systemd\n"), None);
     }
 
     // Phase 2 — UnitType::label

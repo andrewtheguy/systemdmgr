@@ -120,7 +120,7 @@ Press `?` in the app to see context-sensitive help.
 ## Requirements
 
 - Rust 1.85+ (2024 edition)
-- Linux with systemd (for local management)
+- systemd 246+ with `systemctl` on `PATH` (local host, or remote host when using `--ssh`)
 - OpenSSL/libssl (for remote management via `--ssh`)
 
 ## License

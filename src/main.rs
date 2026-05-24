@@ -18,7 +18,7 @@ use ratatui::{prelude::*, Terminal};
 use std::sync::Arc;
 
 use app::App;
-use service::{CommandRunner, LocalRunner, SshRunner};
+use service::{validate_systemctl_version, CommandRunner, LocalRunner, SshRunner};
 
 const LIVE_TAIL_REFRESH_INTERVAL: Duration = Duration::from_millis(500);
 
@@ -67,7 +67,6 @@ fn main() -> io::Result<()> {
         eprintln!("Connecting to {host}...");
         match SshRunner::connect(host, identity_files) {
             Ok(r) => {
-                eprintln!("Connected.");
                 (Arc::new(r), Some(host.clone()))
             }
             Err(e) => {
@@ -78,6 +77,22 @@ fn main() -> io::Result<()> {
     } else {
         (Arc::new(LocalRunner), None)
     };
+
+    match validate_systemctl_version(runner.as_ref()) {
+        Ok(version) => {
+            if host_label.is_some() {
+                eprintln!("Connected. Remote systemd {version}.");
+            }
+        }
+        Err(e) => {
+            if let Some(host) = host_label.as_deref() {
+                eprintln!("Remote systemctl validation failed for {host}: {e}");
+            } else {
+                eprintln!("Local systemctl validation failed: {e}");
+            }
+            std::process::exit(1);
+        }
+    }
 
     // Setup terminal with mouse capture
     enable_raw_mode()?;
