@@ -55,7 +55,7 @@ systemdmgr --ssh user@server
 systemdmgr --ssh user@server --ssh-identity-file ~/.ssh/deploy_key
 ```
 
-Authenticates via none, SSH agent, key files, hostbased auth, keyboard-interactive prompts such as OTP/MFA, or password prompts, then reuses a single connection for all commands. Supports `~/.ssh/config` Host aliases, custom ports, and identity files. `--user` mode works over SSH (requires `loginctl enable-linger` on the remote).
+Authenticates via none, SSH agent, unencrypted key files, hostbased auth, keyboard-interactive prompts such as OTP/MFA, or password prompts, then reuses a single connection for all commands. Supports `~/.ssh/config` Host aliases, custom ports, and identity files. Add passphrase-protected keys to `ssh-agent`; direct key-file authentication does not prompt for private key passphrases. `--user` mode works over SSH (requires `loginctl enable-linger` on the remote).
 
 See [docs/ssh.md](docs/ssh.md) for full details on host resolution, authentication, and troubleshooting.
 

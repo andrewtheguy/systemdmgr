@@ -11,10 +11,10 @@ pub const COLOR_MUTED: Color = Color::Rgb(100, 100, 100);
 use serde::Deserialize;
 use std::collections::HashMap;
 use std::io::{self, Read as _, Write as _};
-use std::net::TcpStream;
+use std::net::{TcpStream, ToSocketAddrs};
 use std::process::{Command, Stdio};
 use std::sync::{Arc, Mutex};
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 pub struct CommandOutput {
     pub success: bool,
@@ -112,7 +112,12 @@ impl SshRunner {
         }
 
         let addr = format!("{}:{}", parsed.hostname, parsed.port);
-        let tcp = TcpStream::connect(&addr)
+        let socket_addr = (parsed.hostname.as_str(), parsed.port)
+            .to_socket_addrs()
+            .map_err(|e| format!("Failed to connect to {}: {}", addr, e))?
+            .next()
+            .ok_or_else(|| format!("Failed to connect to {}: no socket addresses resolved", addr))?;
+        let tcp = TcpStream::connect_timeout(&socket_addr, Duration::from_secs(30))
             .map_err(|e| format!("Failed to connect to {}: {}", addr, e))?;
 
         let mut session = ssh2::Session::new()

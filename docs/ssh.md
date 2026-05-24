@@ -36,6 +36,7 @@ systemdmgr --ssh deploy@myserver --ssh-identity-file ~/.ssh/deploy_key
 ```
 
 When this flag is present, the specified key files override `IdentityFile` entries from `~/.ssh/config` and are tried before SSH agent identities.
+Passphrase-protected private key files are not supported when loaded directly from disk. Add encrypted keys to `ssh-agent` instead.
 
 ### `~/.ssh/config` Support
 
@@ -126,6 +127,7 @@ When running commands over SSH, arguments are combined into a single command str
 | Problem | Solution |
 |---------|----------|
 | "SSH authentication failed: no supported authentication methods succeeded" | Ensure `ssh-agent` is running with keys loaded, key files exist at `~/.ssh/id_ed25519` (or similar), or the server offers keyboard-interactive/password authentication. Check `IdentityFile` in `~/.ssh/config`. |
+| Encrypted private key file fails | Add the key to `ssh-agent`; direct key-file authentication does not prompt for private key passphrases. |
 | "Failed to connect to host:22" | Verify the host is reachable and sshd is running. Check `HostName` and `Port` in `~/.ssh/config`. |
 | "SSH handshake failed" | The remote server may not support the key exchange algorithms available in libssh2. |
 | User units not visible | Run `loginctl enable-linger <username>` on the remote server. |
