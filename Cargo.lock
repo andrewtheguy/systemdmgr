@@ -1278,7 +1278,6 @@ version = "0.0.5"
 dependencies = [
  "chrono",
  "crossterm",
- "libc",
  "ratatui",
  "serde",
  "serde_json",
