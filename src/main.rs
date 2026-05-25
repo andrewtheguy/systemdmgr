@@ -86,9 +86,13 @@ fn main() -> io::Result<()> {
         }
         Err(e) => {
             if let Some(host) = host_label.as_deref() {
-                eprintln!("Remote systemctl validation failed for {host}: {e}");
+                eprintln!("Error: systemctl is not available on remote host '{host}'.");
+                eprintln!("Ensure the remote host is running Linux with systemd installed.");
+                eprintln!("Detail: {e}");
             } else {
-                eprintln!("Local systemctl validation failed: {e}");
+                eprintln!("Error: systemctl is not available on this machine.");
+                eprintln!("systemdmgr requires Linux with systemd. It cannot run natively on macOS or other non-systemd systems.");
+                eprintln!("To manage services on a remote Linux host, use: systemdmgr <ssh-host>");
             }
             std::process::exit(1);
         }
