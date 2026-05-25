@@ -12,10 +12,10 @@ A terminal UI for managing and browsing systemd units.
 - Browse systemd units (services, sockets, timers, paths, targets) with status indicators
 - Search units by name or description
 - Filter by status, file state, and unit type via picker dialogs
-- View unit details and properties
+- View unit details, properties, and read-only unit file content
 - Perform unit actions (start, stop, restart, enable, disable, reload, daemon-reload)
-- View unit logs in a side panel with search, priority filter, and time range filter
-- Live tail mode for real-time log monitoring
+- View focused per-unit or system-wide logs with search, priority filter, and time range filter
+- Live tail mode with pause/resume for real-time log monitoring
 - Toggle between user and system units
 - Remote management via SSH (authenticate once, persistent connection)
 - Mouse support (click to select, scroll to navigate)
@@ -79,6 +79,7 @@ See [docs/ssh.md](docs/ssh.md) for full details on host resolution, authenticati
 
 ```bash
 systemdmgr version
+systemdmgr --version
 ```
 
 ## Keyboard Shortcuts
@@ -99,16 +100,20 @@ Press `?` in the app to see context-sensitive help.
 | `f` | File state filter picker |
 | `t` | Unit type picker |
 | `i` / `Enter` | Open unit details |
+| `v` | View unit file |
 | `x` | Action picker (start/stop/restart/etc.) |
 | `R` | Daemon reload |
 | `l` | Open logs |
+| `L` | Open system-wide logs |
+| `p` | Log priority filter |
+| `T` | Log time range filter |
 | `r` | Refresh units |
 | `u` | Toggle user/system units |
 | `Esc` | Clear search or quit |
 | `q` | Quit |
 | `?` | Toggle help |
 
-### Logs Panel
+### Logs View
 
 | Key | Action |
 |-----|--------|
@@ -122,9 +127,26 @@ Press `?` in the app to see context-sensitive help.
 | `n` / `N` | Next / previous match |
 | `p` | Priority filter |
 | `t` | Time range filter |
-| `f` | Toggle live tail |
+| `x` | Action picker |
+| `f` | Pause/resume live tail |
 | `l` | Exit logs |
+| `L` | Toggle system-wide logs |
+| `Enter` | Open selected unit from paused system-wide logs |
 | `Esc` | Clear search / exit logs |
+| `?` | Toggle help |
+
+### Unit File View
+
+| Key | Action |
+|-----|--------|
+| `Down` / `Up` | Scroll down / up |
+| `g` / `Home` | Go to top |
+| `G` / `End` | Go to bottom |
+| `PgUp` / `PgDn` | Page scroll |
+| `Ctrl+u` / `Ctrl+d` | Half page scroll |
+| `/` | Search unit file |
+| `n` / `N` | Next / previous match |
+| `v` / `Esc` / `q` | Close unit file |
 | `?` | Toggle help |
 
 ## Documentation

@@ -4,11 +4,11 @@
 
 These features are excluded from systemdmgr's scope.
 
-### Write/Mutating Operations
+### Excluded Mutating Operations
 
 - Mask, unmask services
 - Create new timer or service units
-- Edit unit files
+- Edit unit files (viewing unit files is supported)
 - PolicyKit / privilege escalation
 
 ### System Administration

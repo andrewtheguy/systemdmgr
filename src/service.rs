@@ -594,6 +594,7 @@ impl SshHostConfig {
 
         let default_user = std::env::var("USER").unwrap_or_else(|_| "root".to_string());
         let home = std::env::var("HOME").unwrap_or_default();
+        let has_cli_user = cli_user.is_some();
 
         let mut config = SshHostConfig {
             hostname: host_alias.to_string(),
@@ -605,13 +606,19 @@ impl SshHostConfig {
 
         let config_path = format!("{}/.ssh/config", home);
         if let Ok(content) = std::fs::read_to_string(&config_path) {
-            config.apply_ssh_config(&content, host_alias, cli_port.is_some());
+            config.apply_ssh_config(&content, host_alias, has_cli_user, cli_port.is_some());
         }
 
         Ok(config)
     }
 
-    fn apply_ssh_config(&mut self, content: &str, host_alias: &str, has_cli_port: bool) {
+    fn apply_ssh_config(
+        &mut self,
+        content: &str,
+        host_alias: &str,
+        has_cli_user: bool,
+        has_cli_port: bool,
+    ) {
         let mut reader = std::io::BufReader::new(content.as_bytes());
         let parsed = match ssh2_config::SshConfig::default()
             .parse(&mut reader, ssh2_config::ParseRule::ALLOW_UNKNOWN_FIELDS | ssh2_config::ParseRule::ALLOW_UNSUPPORTED_FIELDS)
@@ -629,10 +636,13 @@ impl SshHostConfig {
             self.hostname = hostname;
         }
         if let Some(port) = params.port
-            && !has_cli_port {
-                self.port = port;
-            }
-        if let Some(user) = params.user {
+            && !has_cli_port
+        {
+            self.port = port;
+        }
+        if let Some(user) = params.user
+            && !has_cli_user
+        {
             self.user = user;
         }
         if let Some(files) = params.identity_file {
@@ -1478,6 +1488,7 @@ Host *.example.com
 "#,
             "api.example.com",
             false,
+            false,
         );
 
         assert_eq!(config.hostname, "internal.example.com");
@@ -1497,6 +1508,7 @@ Host *.example.com
         config.apply_ssh_config(
             "Host myserver\n    HostName 10.0.0.1\n    Port 2222\n    User admin\n",
             "myserver",
+            false,
             false,
         );
 
@@ -1519,6 +1531,7 @@ Host *.example.com
             "Host myserver\n    HostName 10.0.0.1\n    User admin\n",
             "other",
             false,
+            false,
         );
 
         assert_eq!(config.hostname, "other");
@@ -1538,10 +1551,32 @@ Host *.example.com
         config.apply_ssh_config(
             "Host myserver\n    Port 2222\n",
             "myserver",
+            false,
             true,
         );
 
         assert_eq!(config.port, 3333);
+    }
+
+    #[test]
+    fn test_ssh_config_cli_user_not_overridden() {
+        let mut config = SshHostConfig {
+            hostname: "myserver".into(),
+            port: 22,
+            user: "cli-user".into(),
+            identity_files: Vec::new(),
+            identity_files_override: false,
+        };
+
+        config.apply_ssh_config(
+            "Host myserver\n    HostName 10.0.0.1\n    User admin\n",
+            "myserver",
+            true,
+            false,
+        );
+
+        assert_eq!(config.hostname, "10.0.0.1");
+        assert_eq!(config.user, "cli-user");
     }
 
     // Phase 2 — UnitType::label
