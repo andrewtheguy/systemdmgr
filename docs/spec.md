@@ -2,13 +2,13 @@
 
 ## Overview
 
-systemdmgr is a terminal UI (TUI) for browsing, inspecting, and managing systemd units. It provides access to unit listings, logs, detailed properties, and basic unit management actions (start/stop/restart/reload, enable/disable, daemon-reload).
+systemdmgr is a terminal UI (TUI) for browsing, inspecting, and managing systemd units. It provides access to unit listings, focused per-unit and system-wide logs, detailed properties, read-only unit file content, and basic unit management actions (start/stop/restart/reload, enable/disable, daemon-reload).
 
 **Tech stack:**
 - Language: Rust
 - TUI framework: [ratatui](https://ratatui.rs/)
 - Terminal backend: [crossterm](https://docs.rs/crossterm/)
-- Data source: `systemctl` and `journalctl` CLI commands (JSON output)
+- Data source: `systemctl` and `journalctl` CLI commands (JSON output where available)
 - Minimum systemd version: 246
 
 ## Architecture
@@ -40,19 +40,19 @@ src/
 ## UI Layout
 
 ```
-┌─────────────────────────────────────────┐
-│  Header (title / search bar / filter)   │  3 rows
-├───────────────────┬─────────────────────┤
-│  Unit List        │  Logs Panel         │  Dynamic
-│  (full or 40%)    │  (60%, optional)    │
-├───────────────────┴─────────────────────┤
-│  Footer (context-sensitive keybindings) │  3 rows
-└─────────────────────────────────────────┘
+┌──────────────────────────────────────────────┐
+│  Header (title / search bar / filter)        │  3 rows
+├──────────────────────────────────────────────┤
+│  Primary pane: unit list, logs, or unit file  │  Dynamic
+├──────────────────────────────────────────────┤
+│  Footer (context-sensitive keybindings)      │  3 rows
+└──────────────────────────────────────────────┘
 ```
 
-- Header shows: app title with scope label, or active search query, or active filter summary with match count
-- Unit list takes full width when logs are hidden, 40% when logs are visible
-- Footer keybindings change based on current mode (normal, search, log focus, log search)
+- Header shows: app title with scope label, active search query, active filter summary with match count, status messages, or the current focused view
+- The middle area shows one focused view at a time: unit list, logs, or unit file content
+- Logs and unit file views replace the unit list until closed
+- Footer keybindings change based on current mode (unit list, search, logs, log search, unit file, unit file search)
 
 ## Features
 
@@ -83,8 +83,8 @@ src/
 ### System/User Scope
 
 - Toggle between system and user unit scope via `u` key
-- System mode: `systemctl` (default) / `journalctl -u`
-- User mode: `systemctl --user` / `journalctl --user-unit`
+- System mode: `systemctl` (default) / per-unit logs via `journalctl -u`
+- User mode: `systemctl --user` / per-unit logs via `journalctl --user-unit`
 - Header displays `[System]` or `[User]`
 - Switching scope clears: logs, log search, priority filter, time range, property cache, file state filter
 
@@ -109,7 +109,7 @@ src/
 **Combined filtering:**
 - All three filters (search, status, file state) can be active simultaneously
 - Match count displayed in header
-- `Esc` clears active search/filters
+- `Esc` clears the text search when one is active; status and file state filters are reset by choosing `All` in their pickers
 
 ### Status Colors
 
@@ -129,10 +129,13 @@ src/
 
 ### Log Viewing
 
-- Toggled with `l` key — opens scrollable panel (right 60% of screen)
+- Toggled with `l` key for the selected unit; opens a focused full-screen logs view
+- `L` opens system-wide logs with no unit filter
 - Fetches last 1000 log entries via `journalctl --output=json`
 - Auto-scrolls to most recent entry on load
-- Logs reload when selection changes or filters are marked dirty
+- Per-unit logs load for the selected unit when the logs view opens; logs reload when filters are marked dirty
+- Live tail is enabled by default and refreshes from the last journal cursor every 500ms when not paused; `f` pauses/resumes live tail
+- When paused, arrows move a selected log entry. In system-wide logs, `Enter` opens that entry's unit if it is present in the current unit list.
 
 **Structured log display** — each line shows:
 1. Timestamp (local time, format: `Mon DD HH:MM:SS`)
@@ -142,11 +145,13 @@ src/
 
 **Byte-array messages:** journalctl sometimes returns `MESSAGE` as a byte array instead of a string — handled via UTF-8 lossy conversion.
 
+**Boundaries:** boot ID changes render a boot separator; per-unit invocation ID changes render a restart separator.
+
 **Priority filter** (`p` key):
 - Popup picker: All + 8 levels (emerg, alert, crit, err, warning, notice, info, debug)
 - Passes `-p <level>` to journalctl
 
-**Time range filter** (`T` key):
+**Time range filter** (`t` key in logs, `T` key from the unit list):
 - Popup picker: All, Last 15 minutes, Last 1 hour, Last 24 hours, Last 7 days, Today
 - Passes `--since <value>` to journalctl
 
@@ -180,7 +185,10 @@ src/
 
 | Section | Fields | Visibility |
 |---------|--------|------------|
-| General | Description, Unit File path, Enabled State (color-coded), Active State (with sub-state), Load State | Always |
+| General | Name, Status, Enabled State (color-coded), Load State, Description, Active State, Active Since, Unit File path | Always |
+| Timer | Schedule, Next Trigger, Last Trigger, Result, Persistent, Accuracy, Random Delay | `.timer` units when data is available |
+| Socket | Listen, Accept, Accepted, Connected, Triggers | `.socket` units when data is available |
+| Path | Watch, Triggers | `.path` units when data is available |
 | Process | Main PID, Start Timestamp | Only when PID > 0 |
 | Resources | Memory (formatted), CPU Time (formatted) | Only when data available |
 | Dependencies | Requires, Wants, After, Before, Conflicts, TriggeredBy, Triggers | Only when any present |
@@ -190,6 +198,15 @@ src/
 - `format_cpu_time()`: nanoseconds → "0.500s" or "1.5min"
 
 **Caching:** Properties cached per unit name per session. Cache cleared on refresh, scope switch, or type switch.
+
+### Unit File Viewer
+
+- Opened with `v` from the unit list
+- Fetches read-only unit content via `systemctl [--user] cat <unit> --no-pager`
+- Replaces the unit list with a focused full-screen unit file view until closed
+- Searchable with `/`; matches are highlighted and navigable with `n`/`N`
+- Navigation keys: arrows, `g`/`G`, `Home`/`End`, `PgUp`/`PgDn`, `Ctrl+u`/`Ctrl+d`
+- Closed with `v`, `Esc`, or `q`
 
 ### Unit Actions
 
@@ -230,28 +247,32 @@ src/
 | `g`/`Home` | Go to top |
 | `G`/`End` | Go to bottom |
 | `PgUp`/`PgDn` | Page up/down |
-| `Ctrl+u`/`Ctrl+d` | Half-page scroll (logs) |
-| `/` | Start search |
-| `n`/`N` | Next/prev search match (logs) |
+| `Ctrl+u`/`Ctrl+d` | Half-page scroll (logs or unit file) |
+| `/` | Start search in the current view |
+| `n`/`N` | Next/prev search match (logs or unit file) |
 | `s` | Status filter picker |
-| `f` | File state filter picker |
-| `t` | Unit type picker |
+| `f` | File state filter picker (unit list) / pause-resume live tail (logs) |
+| `t` | Unit type picker (unit list) / time range filter picker (logs) |
 | `p` | Priority filter picker |
-| `T` | Time range filter picker |
-| `i`/`Enter` | Open unit details |
+| `T` | Time range filter picker (unit list) |
+| `i`/`Enter` | Open unit details from the unit list |
+| `Enter` | Open selected unit from paused system-wide logs |
+| `v` | Open/close unit file view |
 | `x` | Open unit action picker |
 | `R` | Daemon reload (direct confirm) |
-| `l` | Toggle log panel |
+| `l` | Open/close selected unit logs |
+| `L` | Toggle system-wide logs |
 | `u` | Toggle user/system scope |
 | `r` | Refresh units |
 | `?` | Toggle help overlay |
-| `q`/`Esc` | Quit / clear filter |
+| `q`/`Esc` | Quit, clear active search, or exit focused view depending on context |
 
 **Mouse support:**
 - Left click to select unit in list
-- Scroll wheel to navigate list or scroll logs
+- Scroll wheel to navigate the unit list or scroll logs
+- In logs, left click pauses live tail and selects a log entry; re-clicking a selected system-wide log entry navigates to its unit when available
 
-**Modals** block all other input until closed — status picker, type picker, priority picker, time picker, file state picker, action picker, confirmation dialog, details modal, help overlay.
+**Modal overlays** block all other input until closed — status picker, type picker, priority picker, time picker, file state picker, action picker, confirmation dialog, details modal, help overlay. Logs and unit file content are focused views with their own keymaps, not overlays.
 
 ## Feature Matrix
 
@@ -271,6 +292,7 @@ src/
 | Search by name/description | Yes | Yes |
 | **Log Viewing** | | |
 | View unit logs | Yes | Yes |
+| View system-wide logs | Yes | Yes |
 | Search within logs | Yes | Yes |
 | Filter by log severity/priority | Yes | Yes |
 | Filter by time range | Yes | Yes |
@@ -283,6 +305,7 @@ src/
 | SSH remote management | No (web-based) | Yes |
 | **Unit Details** | | |
 | Unit file path display | Yes | Yes |
+| Unit file content display | Yes | Yes |
 | Unit dependencies | Yes | Yes |
 | Auto-start / enabled state | Yes | Yes |
 | Runtime properties (PID, memory, CPU) | Yes | Yes |
