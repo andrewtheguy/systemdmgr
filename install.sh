@@ -191,7 +191,7 @@ detect_os() {
             OS="linux"
             ;;
         Darwin*)
-            OS="darwin"
+            OS="macos"
             ;;
         *)
             print_error "Unsupported operating system: $(uname -s)"
@@ -232,7 +232,7 @@ download_binary() {
     print_info "Downloading ${BINARY_NAME} from ${url}"
 
     if command -v curl >/dev/null 2>&1; then
-        if ! curl -L -o "$output_path" "$url"; then
+        if ! curl -fL -o "$output_path" "$url"; then
             print_error "Failed to download binary"
             exit 1
         fi
@@ -246,15 +246,16 @@ download_binary() {
         exit 1
     fi
 
-    # Verify checksum if available
-    if [ -n "$EXPECTED_CHECKSUM" ]; then
-        if ! verify_checksum "$output_path" "$EXPECTED_CHECKSUM"; then
-            print_error "Binary integrity check failed. Aborting."
-            rm -f "$output_path"
-            exit 1
-        fi
-    else
-        print_warn "No checksum available for verification (may be a prerelease)"
+    # Verify checksum
+    if [ -z "$EXPECTED_CHECKSUM" ]; then
+        print_error "No checksum available for verification. Aborting."
+        rm -f "$output_path"
+        exit 1
+    fi
+    if ! verify_checksum "$output_path" "$EXPECTED_CHECKSUM"; then
+        print_error "Binary integrity check failed. Aborting."
+        rm -f "$output_path"
+        exit 1
     fi
 }
 
@@ -276,7 +277,7 @@ download_and_install() {
     local install_dir
     local needs_sudo=false
 
-    if [ "$OS" = "darwin" ]; then
+    if [ "$OS" = "macos" ]; then
         install_dir="${HOME}/.local/bin"
         mkdir -p "$install_dir"
     else
@@ -309,7 +310,7 @@ download_and_install() {
 
     print_info "Binary installed successfully to ${final_path}"
 
-    if [ "$OS" = "darwin" ]; then
+    if [ "$OS" = "macos" ]; then
         case ":$PATH:" in
             *":${install_dir}:"*) ;;
             *) print_warn "Make sure ${install_dir} is in your PATH" ;;
