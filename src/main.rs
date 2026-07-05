@@ -129,11 +129,12 @@ fn main() -> io::Result<()> {
 
         terminal.draw(|frame| ui::render(frame, &mut app, live_indicator_on))?;
 
-        let mut poll_timeout = if app.action_in_progress || app.log_refresh_in_flight() {
-            Duration::from_millis(100)
-        } else {
-            Duration::from_secs(60)
-        };
+        let mut poll_timeout =
+            if app.action_in_progress || app.refresh_in_flight() || app.log_refresh_in_flight() {
+                Duration::from_millis(100)
+            } else {
+                Duration::from_secs(60)
+            };
 
         if actively_tailing {
             let refresh_wait =
