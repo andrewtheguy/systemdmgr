@@ -109,9 +109,33 @@ fn join_remote_command(program: &str, args: &[&str]) -> String {
         .join(" ")
 }
 
+/// Unix socket paths are limited to ~104 bytes (macOS); leave margin for the
+/// socket name within the control directory.
+const MAX_CONTROL_SOCKET_PATH: usize = 90;
+
+/// The control socket inside the per-process control directory. The directory
+/// is private to this process and one process talks to exactly one
+/// destination, so a short fixed name is unique — ssh's `%C` hash (40 bytes)
+/// would overflow the socket path limit under macOS's long temp dirs.
+fn control_socket_path(control_dir: &std::path::Path) -> std::path::PathBuf {
+    control_dir.join("ctl")
+}
+
+fn control_dir_candidate(base: &std::path::Path) -> Option<std::path::PathBuf> {
+    let dir = base.join(format!("systemdmgr-ssh-{}", std::process::id()));
+    (control_socket_path(&dir).as_os_str().len() <= MAX_CONTROL_SOCKET_PATH).then_some(dir)
+}
+
 fn create_control_dir() -> Result<std::path::PathBuf, String> {
     use std::os::unix::fs::DirBuilderExt;
-    let dir = std::env::temp_dir().join(format!("systemdmgr-ssh-{}", std::process::id()));
+    // Fall back to /tmp when the system temp dir would make the socket path
+    // exceed the OS limit (e.g. an unusually long $TMPDIR).
+    let dir = [std::env::temp_dir(), std::path::PathBuf::from("/tmp")]
+        .iter()
+        .find_map(|base| control_dir_candidate(base))
+        .ok_or_else(|| {
+            "no temp directory short enough for the SSH control socket; set TMPDIR to a shorter path".to_string()
+        })?;
     std::fs::DirBuilder::new()
         .recursive(true)
         .mode(0o700)
@@ -129,7 +153,7 @@ fn create_control_dir() -> Result<std::path::PathBuf, String> {
 fn multiplex_args(control_dir: &std::path::Path, batch_mode: bool) -> Vec<String> {
     let mut args = vec![
         "-o".to_string(),
-        format!("ControlPath={}/%C", control_dir.display()),
+        format!("ControlPath={}", control_socket_path(control_dir).display()),
         "-o".to_string(),
         "ControlMaster=auto".to_string(),
         "-o".to_string(),
@@ -1115,13 +1139,33 @@ mod tests {
 
     #[test]
     fn test_multiplex_args_batch_mode() {
-        let args = multiplex_args(std::path::Path::new("/nonexistent/ctl"), true);
-        assert!(args.contains(&"ControlPath=/nonexistent/ctl/%C".to_string()));
+        let args = multiplex_args(std::path::Path::new("/nonexistent/cdir"), true);
+        assert!(args.contains(&"ControlPath=/nonexistent/cdir/ctl".to_string()));
         assert!(args.contains(&"ControlMaster=auto".to_string()));
         assert!(args.contains(&"BatchMode=yes".to_string()));
         // The master's lifetime is tied to the watchdog child, never to a
         // detached daemon that could outlive this process.
         assert!(!args.iter().any(|a| a.starts_with("ControlPersist")));
+    }
+
+    #[test]
+    fn test_control_dir_candidate_short_base_accepted() {
+        assert!(control_dir_candidate(std::path::Path::new("/tmp")).is_some());
+    }
+
+    #[test]
+    fn test_control_dir_candidate_macos_style_base_accepted() {
+        // Typical macOS temp dir (~49 bytes) must fit; the old %C-based path
+        // exceeded the 104-byte Unix socket limit here.
+        let base = "/var/folders/46/28sdmn0s021cm_l4c_tkx0h80000gn/T";
+        let dir = control_dir_candidate(std::path::Path::new(base)).unwrap();
+        assert!(control_socket_path(&dir).as_os_str().len() <= MAX_CONTROL_SOCKET_PATH);
+    }
+
+    #[test]
+    fn test_control_dir_candidate_overlong_base_rejected() {
+        let base = format!("/{}", "x".repeat(MAX_CONTROL_SOCKET_PATH));
+        assert!(control_dir_candidate(std::path::Path::new(&base)).is_none());
     }
 
     #[test]
