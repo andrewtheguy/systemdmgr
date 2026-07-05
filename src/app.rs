@@ -72,6 +72,13 @@ pub struct App {
     pub action_result: Option<Result<String, String>>,
     pub action_receiver: Option<mpsc::Receiver<Result<String, String>>>,
     pub refresh_receiver: Option<mpsc::Receiver<Vec<SystemdUnit>>>,
+    // Live tail runs on a background thread so a slow runner (SSH) never
+    // blocks the UI. A result is only merged if its generation still matches
+    // log_stream_generation, which is bumped whenever the log buffer is
+    // replaced or cleared.
+    pub log_refresh_receiver: Option<mpsc::Receiver<Vec<LogEntry>>>,
+    pub log_refresh_generation: u64,
+    pub log_stream_generation: u64,
     pub status_message: Option<String>,
     pub system_logs_mode: bool,
     pub navigated_from_system_logs: bool,
@@ -151,6 +158,9 @@ impl App {
             action_result: None,
             action_receiver: None,
             refresh_receiver: None,
+            log_refresh_receiver: None,
+            log_refresh_generation: 0,
+            log_stream_generation: 0,
             status_message: None,
             system_logs_mode: false,
             navigated_from_system_logs: false,
@@ -328,6 +338,7 @@ impl App {
                 self.file_state_filter = None;
                 self.search_query.clear();
                 self.last_selected_service = None;
+                self.invalidate_log_stream();
                 self.logs.clear();
                 self.clear_log_search();
                 self.log_priority_filter = None;
@@ -461,6 +472,7 @@ impl App {
             if !self.log_filters_dirty && !self.logs.is_empty() {
                 return;
             }
+            self.invalidate_log_stream();
             self.invalidate_log_entry_heights_cache();
             self.log_filters_dirty = false;
             self.logs_scroll = 0;
@@ -499,6 +511,7 @@ impl App {
         let current_service = self.selected_unit().map(|s| s.unit.clone());
 
         if current_service != self.last_selected_service || self.log_filters_dirty {
+            self.invalidate_log_stream();
             self.invalidate_log_entry_heights_cache();
             self.last_selected_service = current_service.clone();
             self.log_filters_dirty = false;
@@ -584,6 +597,7 @@ impl App {
             self.show_logs = true;
             self.log_paused = false;
             self.log_selected_entry = None;
+            self.invalidate_log_stream();
             self.logs.clear();
             self.invalidate_log_entry_heights_cache();
             self.clear_log_search();
@@ -664,7 +678,13 @@ impl App {
         self.log_paused = false;
     }
 
+    /// Starts a live-tail refresh on a background thread. No-op while a
+    /// previous refresh is still in flight; results are merged by
+    /// check_log_refresh_progress on the UI thread.
     pub fn refresh_logs(&mut self) {
+        if self.log_refresh_receiver.is_some() {
+            return;
+        }
         let unit_name = if self.system_logs_mode {
             None
         } else {
@@ -677,20 +697,67 @@ impl App {
             Some(c) => c.clone(),
             None => return,
         };
-        if let Ok(new_entries) = fetch_log_entries_after_cursor(
-            unit_name.as_deref(),
-            &cursor,
-            self.user_mode,
-            self.log_priority_filter,
-            self.log_time_range,
-            self.runner(),
-        )
-            && !new_entries.is_empty()
+
+        let user_mode = self.user_mode;
+        let priority = self.log_priority_filter;
+        let time_range = self.log_time_range;
+        let runner = Arc::clone(&self.runner);
+        let (tx, rx) = mpsc::channel();
+        self.log_refresh_receiver = Some(rx);
+        self.log_refresh_generation = self.log_stream_generation;
+        std::thread::spawn(move || {
+            let entries = fetch_log_entries_after_cursor(
+                unit_name.as_deref(),
+                &cursor,
+                user_mode,
+                priority,
+                time_range,
+                runner.as_ref(),
+            )
+            .unwrap_or_default();
+            let _ = tx.send(entries);
+        });
+    }
+
+    pub fn log_refresh_in_flight(&self) -> bool {
+        self.log_refresh_receiver.is_some()
+    }
+
+    pub fn check_log_refresh_progress(&mut self) {
+        let Some(rx) = &self.log_refresh_receiver else {
+            return;
+        };
+        let entries = match rx.try_recv() {
+            Ok(entries) => entries,
+            Err(mpsc::TryRecvError::Empty) => return,
+            Err(mpsc::TryRecvError::Disconnected) => {
+                self.log_refresh_receiver = None;
+                return;
+            }
+        };
+        self.log_refresh_receiver = None;
+
+        // Drop results that belong to a log buffer that has since been
+        // replaced (unit switch, filter change, scope toggle), or that would
+        // disturb a paused view; the unchanged cursor refetches them later.
+        if self.log_refresh_generation != self.log_stream_generation
+            || !self.show_logs
+            || self.log_paused
+            || entries.is_empty()
         {
-            self.logs.extend(new_entries);
-            self.invalidate_log_entry_heights_cache();
-            self.logs_scroll = usize::MAX;
+            return;
         }
+
+        self.logs.extend(entries);
+        self.invalidate_log_entry_heights_cache();
+        self.logs_scroll = usize::MAX;
+    }
+
+    /// Marks the current log buffer as replaced, so in-flight live-tail
+    /// results for the previous buffer are discarded instead of merged.
+    fn invalidate_log_stream(&mut self) {
+        self.log_stream_generation = self.log_stream_generation.wrapping_add(1);
+        self.log_refresh_receiver = None;
     }
 
     pub fn toggle_help(&mut self) {
@@ -818,6 +885,7 @@ impl App {
         self.user_mode = !self.user_mode;
         self.system_logs_mode = false;
         self.last_selected_service = None;
+        self.invalidate_log_stream();
         self.logs.clear();
         self.invalidate_log_entry_heights_cache();
         self.clear_log_search();
@@ -1241,6 +1309,9 @@ mod tests {
             action_result: None,
             action_receiver: None,
             refresh_receiver: None,
+            log_refresh_receiver: None,
+            log_refresh_generation: 0,
+            log_stream_generation: 0,
             status_message: None,
             system_logs_mode: false,
             navigated_from_system_logs: false,
@@ -1265,6 +1336,83 @@ mod tests {
 
     fn test_app_empty() -> App {
         test_app_with_services(Vec::new())
+    }
+
+    // Async live-tail refresh
+
+    fn app_with_pending_log_refresh(entries: Vec<LogEntry>) -> App {
+        let mut app = test_app_empty();
+        app.show_logs = true;
+        app.logs = vec![make_log("existing")];
+        let (tx, rx) = mpsc::channel();
+        tx.send(entries).unwrap();
+        app.log_refresh_receiver = Some(rx);
+        app
+    }
+
+    #[test]
+    fn test_log_refresh_merge_appends_entries() {
+        let mut app = app_with_pending_log_refresh(vec![make_log("new entry")]);
+        app.check_log_refresh_progress();
+        assert_eq!(app.logs.len(), 2);
+        assert_eq!(app.logs[1].message, "new entry");
+        assert_eq!(app.logs_scroll, usize::MAX);
+        assert!(!app.log_refresh_in_flight());
+    }
+
+    #[test]
+    fn test_log_refresh_stale_generation_dropped() {
+        let mut app = test_app_empty();
+        app.show_logs = true;
+        app.logs = vec![make_log("existing")];
+        app.invalidate_log_stream();
+        // A result tagged with a pre-invalidation generation must be ignored.
+        let (tx, rx) = mpsc::channel();
+        tx.send(vec![make_log("stale entry")]).unwrap();
+        app.log_refresh_receiver = Some(rx);
+        app.log_refresh_generation = app.log_stream_generation.wrapping_sub(1);
+        app.check_log_refresh_progress();
+        assert_eq!(app.logs.len(), 1);
+        assert!(!app.log_refresh_in_flight());
+    }
+
+    #[test]
+    fn test_log_refresh_dropped_when_paused() {
+        let mut app = app_with_pending_log_refresh(vec![make_log("while paused")]);
+        app.log_paused = true;
+        app.check_log_refresh_progress();
+        assert_eq!(app.logs.len(), 1);
+    }
+
+    #[test]
+    fn test_log_refresh_dropped_when_logs_closed() {
+        let mut app = app_with_pending_log_refresh(vec![make_log("after close")]);
+        app.show_logs = false;
+        app.check_log_refresh_progress();
+        assert_eq!(app.logs.len(), 1);
+    }
+
+    #[test]
+    fn test_refresh_logs_noop_while_in_flight() {
+        let mut app = app_with_pending_log_refresh(vec![make_log("pending")]);
+        app.last_selected_service = Some("test.service".into());
+        app.log_stream_generation = 7;
+        app.log_refresh_generation = 3;
+        app.refresh_logs();
+        // A second refresh must not be started: the pending receiver and its
+        // generation tag stay untouched.
+        assert_eq!(app.log_refresh_generation, 3);
+        app.check_log_refresh_progress();
+        assert_eq!(app.logs.len(), 1, "stale-tagged result must be dropped");
+    }
+
+    #[test]
+    fn test_invalidate_log_stream_bumps_generation_and_drops_receiver() {
+        let mut app = app_with_pending_log_refresh(Vec::new());
+        let before = app.log_stream_generation;
+        app.invalidate_log_stream();
+        assert_ne!(app.log_stream_generation, before);
+        assert!(!app.log_refresh_in_flight());
     }
 
     fn test_app_with_subs(subs: &[&str]) -> App {

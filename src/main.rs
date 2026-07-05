@@ -102,6 +102,7 @@ fn main() -> io::Result<()> {
 
     loop {
         app.check_action_progress();
+        app.check_log_refresh_progress();
         let live_mode = !app.log_paused && app.show_logs;
         let actively_tailing = live_mode && app.logs_at_bottom;
 
@@ -128,7 +129,7 @@ fn main() -> io::Result<()> {
 
         terminal.draw(|frame| ui::render(frame, &mut app, live_indicator_on))?;
 
-        let mut poll_timeout = if app.action_in_progress {
+        let mut poll_timeout = if app.action_in_progress || app.log_refresh_in_flight() {
             Duration::from_millis(100)
         } else {
             Duration::from_secs(60)

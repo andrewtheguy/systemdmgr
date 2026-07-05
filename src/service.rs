@@ -714,6 +714,32 @@ pub fn format_log_timestamp(timestamp_us: i64) -> String {
 }
 
 pub fn fetch_units(unit_type: UnitType, user_mode: bool, runner: &dyn CommandRunner) -> Result<Vec<SystemdUnit>, String> {
+    // The unit list, detail entries, and file states come from independent
+    // systemctl calls; fetch them concurrently so a remote runner (SSH) pays
+    // one network round trip instead of three.
+    let (units, timer_entries, socket_entries, file_states) = std::thread::scope(|s| {
+        let timers = (unit_type == UnitType::Timer)
+            .then(|| s.spawn(|| fetch_timer_entries(user_mode, runner)));
+        let sockets = (unit_type == UnitType::Socket)
+            .then(|| s.spawn(|| fetch_socket_entries(user_mode, runner)));
+        let file_states = s.spawn(|| fetch_unit_file_states(unit_type, user_mode, runner));
+        let units = fetch_unit_list(unit_type, user_mode, runner);
+        (
+            units,
+            timers.map_or_else(Vec::new, |h| h.join().unwrap_or_default()),
+            sockets.map_or_else(Vec::new, |h| h.join().unwrap_or_default()),
+            file_states.join().unwrap_or_default(),
+        )
+    });
+
+    let mut units = units?;
+    apply_timer_details(&mut units, &timer_entries);
+    apply_socket_details(&mut units, &socket_entries);
+    apply_file_states(&mut units, &file_states);
+    Ok(units)
+}
+
+fn fetch_unit_list(unit_type: UnitType, user_mode: bool, runner: &dyn CommandRunner) -> Result<Vec<SystemdUnit>, String> {
     let mut args = Vec::new();
     if user_mode {
         args.push("--user");
@@ -729,18 +755,7 @@ pub fn fetch_units(unit_type: UnitType, user_mode: bool, runner: &dyn CommandRun
         ));
     }
 
-    let mut units: Vec<SystemdUnit> = serde_json::from_slice(&output.stdout)
-        .map_err(|e| format!("Failed to parse JSON: {}", e))?;
-
-    match unit_type {
-        UnitType::Timer => merge_timer_details(&mut units, user_mode, runner),
-        UnitType::Socket => merge_socket_details(&mut units, user_mode, runner),
-        _ => {}
-    }
-
-    merge_file_states(&mut units, unit_type, user_mode, runner);
-
-    Ok(units)
+    serde_json::from_slice(&output.stdout).map_err(|e| format!("Failed to parse JSON: {}", e))
 }
 
 #[derive(Deserialize)]
@@ -749,7 +764,7 @@ struct TimerEntry {
     next: u64,
 }
 
-fn merge_timer_details(units: &mut [SystemdUnit], user_mode: bool, runner: &dyn CommandRunner) {
+fn fetch_timer_entries(user_mode: bool, runner: &dyn CommandRunner) -> Vec<TimerEntry> {
     let mut args = Vec::new();
     if user_mode {
         args.push("--user");
@@ -757,16 +772,15 @@ fn merge_timer_details(units: &mut [SystemdUnit], user_mode: bool, runner: &dyn 
     args.extend(["list-timers", "--all", "--no-pager", "--output=json"]);
 
     let Ok(output) = run_systemctl(runner, &args) else {
-        return;
+        return Vec::new();
     };
     if !output.success {
-        return;
+        return Vec::new();
     }
+    serde_json::from_slice(&output.stdout).unwrap_or_default()
+}
 
-    let Ok(entries) = serde_json::from_slice::<Vec<TimerEntry>>(&output.stdout) else {
-        return;
-    };
-
+fn apply_timer_details(units: &mut [SystemdUnit], entries: &[TimerEntry]) {
     let map: HashMap<&str, &TimerEntry> = entries.iter().map(|e| (e.unit.as_str(), e)).collect();
 
     for unit in units.iter_mut() {
@@ -814,7 +828,7 @@ struct SocketEntry {
     listen: String,
 }
 
-fn merge_socket_details(units: &mut [SystemdUnit], user_mode: bool, runner: &dyn CommandRunner) {
+fn fetch_socket_entries(user_mode: bool, runner: &dyn CommandRunner) -> Vec<SocketEntry> {
     let mut args = Vec::new();
     if user_mode {
         args.push("--user");
@@ -822,16 +836,15 @@ fn merge_socket_details(units: &mut [SystemdUnit], user_mode: bool, runner: &dyn
     args.extend(["list-sockets", "--all", "--no-pager", "--output=json"]);
 
     let Ok(output) = run_systemctl(runner, &args) else {
-        return;
+        return Vec::new();
     };
     if !output.success {
-        return;
+        return Vec::new();
     }
+    serde_json::from_slice(&output.stdout).unwrap_or_default()
+}
 
-    let Ok(entries) = serde_json::from_slice::<Vec<SocketEntry>>(&output.stdout) else {
-        return;
-    };
-
+fn apply_socket_details(units: &mut [SystemdUnit], entries: &[SocketEntry]) {
     let map: HashMap<&str, &SocketEntry> = entries.iter().map(|e| (e.unit.as_str(), e)).collect();
 
     for unit in units.iter_mut() {
@@ -882,8 +895,7 @@ fn fetch_unit_file_states(unit_type: UnitType, user_mode: bool, runner: &dyn Com
         .collect()
 }
 
-fn merge_file_states(units: &mut [SystemdUnit], unit_type: UnitType, user_mode: bool, runner: &dyn CommandRunner) {
-    let states = fetch_unit_file_states(unit_type, user_mode, runner);
+fn apply_file_states(units: &mut [SystemdUnit], states: &HashMap<String, String>) {
     for unit in units.iter_mut() {
         if let Some(state) = states.get(&unit.unit) {
             unit.file_state = Some(state.clone());
