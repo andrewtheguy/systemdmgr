@@ -109,9 +109,33 @@ fn join_remote_command(program: &str, args: &[&str]) -> String {
         .join(" ")
 }
 
+/// Unix socket paths are limited to ~104 bytes (macOS); leave margin for the
+/// socket name within the control directory.
+const MAX_CONTROL_SOCKET_PATH: usize = 90;
+
+/// The control socket inside the per-process control directory. The directory
+/// is private to this process and one process talks to exactly one
+/// destination, so a short fixed name is unique — ssh's `%C` hash (40 bytes)
+/// would overflow the socket path limit under macOS's long temp dirs.
+fn control_socket_path(control_dir: &std::path::Path) -> std::path::PathBuf {
+    control_dir.join("ctl")
+}
+
+fn control_dir_candidate(base: &std::path::Path) -> Option<std::path::PathBuf> {
+    let dir = base.join(format!("systemdmgr-ssh-{}", std::process::id()));
+    (control_socket_path(&dir).as_os_str().len() <= MAX_CONTROL_SOCKET_PATH).then_some(dir)
+}
+
 fn create_control_dir() -> Result<std::path::PathBuf, String> {
     use std::os::unix::fs::DirBuilderExt;
-    let dir = std::env::temp_dir().join(format!("systemdmgr-ssh-{}", std::process::id()));
+    // Fall back to /tmp when the system temp dir would make the socket path
+    // exceed the OS limit (e.g. an unusually long $TMPDIR).
+    let dir = [std::env::temp_dir(), std::path::PathBuf::from("/tmp")]
+        .iter()
+        .find_map(|base| control_dir_candidate(base))
+        .ok_or_else(|| {
+            "no temp directory short enough for the SSH control socket; set TMPDIR to a shorter path".to_string()
+        })?;
     std::fs::DirBuilder::new()
         .recursive(true)
         .mode(0o700)
@@ -129,7 +153,7 @@ fn create_control_dir() -> Result<std::path::PathBuf, String> {
 fn multiplex_args(control_dir: &std::path::Path, batch_mode: bool) -> Vec<String> {
     let mut args = vec![
         "-o".to_string(),
-        format!("ControlPath={}/%C", control_dir.display()),
+        format!("ControlPath={}", control_socket_path(control_dir).display()),
         "-o".to_string(),
         "ControlMaster=auto".to_string(),
         "-o".to_string(),
@@ -714,6 +738,32 @@ pub fn format_log_timestamp(timestamp_us: i64) -> String {
 }
 
 pub fn fetch_units(unit_type: UnitType, user_mode: bool, runner: &dyn CommandRunner) -> Result<Vec<SystemdUnit>, String> {
+    // The unit list, detail entries, and file states come from independent
+    // systemctl calls; fetch them concurrently so a remote runner (SSH) pays
+    // one network round trip instead of three.
+    let (units, timer_entries, socket_entries, file_states) = std::thread::scope(|s| {
+        let timers = (unit_type == UnitType::Timer)
+            .then(|| s.spawn(|| fetch_timer_entries(user_mode, runner)));
+        let sockets = (unit_type == UnitType::Socket)
+            .then(|| s.spawn(|| fetch_socket_entries(user_mode, runner)));
+        let file_states = s.spawn(|| fetch_unit_file_states(unit_type, user_mode, runner));
+        let units = fetch_unit_list(unit_type, user_mode, runner);
+        (
+            units,
+            timers.map_or_else(Vec::new, |h| h.join().unwrap_or_default()),
+            sockets.map_or_else(Vec::new, |h| h.join().unwrap_or_default()),
+            file_states.join().unwrap_or_default(),
+        )
+    });
+
+    let mut units = units?;
+    apply_timer_details(&mut units, &timer_entries);
+    apply_socket_details(&mut units, &socket_entries);
+    apply_file_states(&mut units, &file_states);
+    Ok(units)
+}
+
+fn fetch_unit_list(unit_type: UnitType, user_mode: bool, runner: &dyn CommandRunner) -> Result<Vec<SystemdUnit>, String> {
     let mut args = Vec::new();
     if user_mode {
         args.push("--user");
@@ -729,18 +779,7 @@ pub fn fetch_units(unit_type: UnitType, user_mode: bool, runner: &dyn CommandRun
         ));
     }
 
-    let mut units: Vec<SystemdUnit> = serde_json::from_slice(&output.stdout)
-        .map_err(|e| format!("Failed to parse JSON: {}", e))?;
-
-    match unit_type {
-        UnitType::Timer => merge_timer_details(&mut units, user_mode, runner),
-        UnitType::Socket => merge_socket_details(&mut units, user_mode, runner),
-        _ => {}
-    }
-
-    merge_file_states(&mut units, unit_type, user_mode, runner);
-
-    Ok(units)
+    serde_json::from_slice(&output.stdout).map_err(|e| format!("Failed to parse JSON: {}", e))
 }
 
 #[derive(Deserialize)]
@@ -749,7 +788,7 @@ struct TimerEntry {
     next: u64,
 }
 
-fn merge_timer_details(units: &mut [SystemdUnit], user_mode: bool, runner: &dyn CommandRunner) {
+fn fetch_timer_entries(user_mode: bool, runner: &dyn CommandRunner) -> Vec<TimerEntry> {
     let mut args = Vec::new();
     if user_mode {
         args.push("--user");
@@ -757,16 +796,15 @@ fn merge_timer_details(units: &mut [SystemdUnit], user_mode: bool, runner: &dyn 
     args.extend(["list-timers", "--all", "--no-pager", "--output=json"]);
 
     let Ok(output) = run_systemctl(runner, &args) else {
-        return;
+        return Vec::new();
     };
     if !output.success {
-        return;
+        return Vec::new();
     }
+    serde_json::from_slice(&output.stdout).unwrap_or_default()
+}
 
-    let Ok(entries) = serde_json::from_slice::<Vec<TimerEntry>>(&output.stdout) else {
-        return;
-    };
-
+fn apply_timer_details(units: &mut [SystemdUnit], entries: &[TimerEntry]) {
     let map: HashMap<&str, &TimerEntry> = entries.iter().map(|e| (e.unit.as_str(), e)).collect();
 
     for unit in units.iter_mut() {
@@ -814,7 +852,7 @@ struct SocketEntry {
     listen: String,
 }
 
-fn merge_socket_details(units: &mut [SystemdUnit], user_mode: bool, runner: &dyn CommandRunner) {
+fn fetch_socket_entries(user_mode: bool, runner: &dyn CommandRunner) -> Vec<SocketEntry> {
     let mut args = Vec::new();
     if user_mode {
         args.push("--user");
@@ -822,16 +860,15 @@ fn merge_socket_details(units: &mut [SystemdUnit], user_mode: bool, runner: &dyn
     args.extend(["list-sockets", "--all", "--no-pager", "--output=json"]);
 
     let Ok(output) = run_systemctl(runner, &args) else {
-        return;
+        return Vec::new();
     };
     if !output.success {
-        return;
+        return Vec::new();
     }
+    serde_json::from_slice(&output.stdout).unwrap_or_default()
+}
 
-    let Ok(entries) = serde_json::from_slice::<Vec<SocketEntry>>(&output.stdout) else {
-        return;
-    };
-
+fn apply_socket_details(units: &mut [SystemdUnit], entries: &[SocketEntry]) {
     let map: HashMap<&str, &SocketEntry> = entries.iter().map(|e| (e.unit.as_str(), e)).collect();
 
     for unit in units.iter_mut() {
@@ -882,8 +919,7 @@ fn fetch_unit_file_states(unit_type: UnitType, user_mode: bool, runner: &dyn Com
         .collect()
 }
 
-fn merge_file_states(units: &mut [SystemdUnit], unit_type: UnitType, user_mode: bool, runner: &dyn CommandRunner) {
-    let states = fetch_unit_file_states(unit_type, user_mode, runner);
+fn apply_file_states(units: &mut [SystemdUnit], states: &HashMap<String, String>) {
     for unit in units.iter_mut() {
         if let Some(state) = states.get(&unit.unit) {
             unit.file_state = Some(state.clone());
@@ -1103,13 +1139,33 @@ mod tests {
 
     #[test]
     fn test_multiplex_args_batch_mode() {
-        let args = multiplex_args(std::path::Path::new("/nonexistent/ctl"), true);
-        assert!(args.contains(&"ControlPath=/nonexistent/ctl/%C".to_string()));
+        let args = multiplex_args(std::path::Path::new("/nonexistent/cdir"), true);
+        assert!(args.contains(&"ControlPath=/nonexistent/cdir/ctl".to_string()));
         assert!(args.contains(&"ControlMaster=auto".to_string()));
         assert!(args.contains(&"BatchMode=yes".to_string()));
         // The master's lifetime is tied to the watchdog child, never to a
         // detached daemon that could outlive this process.
         assert!(!args.iter().any(|a| a.starts_with("ControlPersist")));
+    }
+
+    #[test]
+    fn test_control_dir_candidate_short_base_accepted() {
+        assert!(control_dir_candidate(std::path::Path::new("/tmp")).is_some());
+    }
+
+    #[test]
+    fn test_control_dir_candidate_macos_style_base_accepted() {
+        // Typical macOS temp dir (~49 bytes) must fit; the old %C-based path
+        // exceeded the 104-byte Unix socket limit here.
+        let base = "/var/folders/46/28sdmn0s021cm_l4c_tkx0h80000gn/T";
+        let dir = control_dir_candidate(std::path::Path::new(base)).unwrap();
+        assert!(control_socket_path(&dir).as_os_str().len() <= MAX_CONTROL_SOCKET_PATH);
+    }
+
+    #[test]
+    fn test_control_dir_candidate_overlong_base_rejected() {
+        let base = format!("/{}", "x".repeat(MAX_CONTROL_SOCKET_PATH));
+        assert!(control_dir_candidate(std::path::Path::new(&base)).is_none());
     }
 
     #[test]

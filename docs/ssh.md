@@ -21,6 +21,7 @@ Connection lifecycle:
 - Every subsequent command multiplexes over the master socket (`ControlPath` under a private, per-process directory in the system temp dir with `0700` permissions), so there is no per-command handshake.
 - Commands inside the TUI run with `BatchMode=yes`, so they fail fast instead of prompting if the master connection is ever lost. If the master dies and your setup authenticates non-interactively (agent or unencrypted key), each command still works by performing its own handshake.
 - Keepalives are sent every 60 seconds (`ServerAliveInterval=60`).
+- Recurring work (live log tailing) runs on a background thread and independent `systemctl` lookups are issued concurrently over the multiplexed connection, so network latency does not freeze the TUI.
 - The master is not a detached daemon: it is a child process running `cat` on the remote host with its stdin tied to a pipe systemdmgr holds. If systemdmgr dies for any reason — including `SIGKILL` — the pipe closes, `cat` sees EOF, and the master stops itself within moments. On normal exit (including panics) the master is closed immediately (`ssh -O exit`) and the control directory removed.
 
 ## Command-Line Arguments
