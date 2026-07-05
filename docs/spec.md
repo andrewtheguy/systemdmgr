@@ -25,7 +25,7 @@ src/
 
 ### Remote Management (SSH)
 
-- Enabled via the `--ssh` CLI flag; everything after it is forwarded to ssh verbatim (`--ssh [ssh-options] destination`)
+- Enabled via the `--ssh` CLI flag; everything after it is forwarded to ssh in the single accepted form `--ssh [ssh-options] destination` (options first, destination last; no `--`, no trailing arguments)
 - Delegates connectivity to the system OpenSSH client (`ssh` on `PATH`) — no bundled SSH library
 - An interactive ControlMaster connection is opened on startup; each command runs as an `ssh` subprocess multiplexed over the master socket (`BatchMode=yes`)
 - Full `~/.ssh/config` semantics, authentication methods (agent, passphrase-protected keys, password, OTP/MFA), host key handling, and jump hosts — all handled by ssh itself

@@ -66,7 +66,7 @@ systemdmgr
 
 Manage systemd units on a remote server over SSH:
 
-Everything after `--ssh` is passed to the ssh client verbatim, using ssh's own `[options] destination` syntax:
+Everything after `--ssh` is passed to the ssh client, in the form `--ssh [ssh-options] destination` (options first, destination last):
 
 ```bash
 systemdmgr --ssh user@server

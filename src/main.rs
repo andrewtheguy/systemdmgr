@@ -53,9 +53,8 @@ fn main() -> io::Result<()> {
     }
 
     let (runner, host_label): (Arc<dyn CommandRunner>, Option<String>) = if let Some(ssh_args) = ssh_args {
-        // The destination is the last argument in ssh's `[options] destination`
-        // syntax; used only for display.
-        let label = ssh_args.last().cloned().unwrap_or_default();
+        let label =
+            service::ssh_destination(&ssh_args).unwrap_or_else(|| ssh_args.join(" "));
         eprintln!("Connecting to {label}...");
         match SshRunner::connect(ssh_args) {
             Ok(r) => (Arc::new(r), Some(label)),
@@ -129,11 +128,12 @@ fn main() -> io::Result<()> {
 
         terminal.draw(|frame| ui::render(frame, &mut app, live_indicator_on))?;
 
-        let mut poll_timeout = if app.action_in_progress || app.log_refresh_in_flight() {
-            Duration::from_millis(100)
-        } else {
-            Duration::from_secs(60)
-        };
+        let mut poll_timeout =
+            if app.action_in_progress || app.refresh_in_flight() || app.log_refresh_in_flight() {
+                Duration::from_millis(100)
+            } else {
+                Duration::from_secs(60)
+            };
 
         if actively_tailing {
             let refresh_wait =

@@ -338,6 +338,8 @@ impl App {
                 self.file_state_filter = None;
                 self.search_query.clear();
                 self.last_selected_service = None;
+                // A pending post-action refresh belongs to the old unit type.
+                self.refresh_receiver = None;
                 self.invalidate_log_stream();
                 self.logs.clear();
                 self.clear_log_search();
@@ -498,6 +500,7 @@ impl App {
                         pid: None,
                         identifier: None,
                         message: format!("Error fetching logs: {}", e),
+                        message_styles: Vec::new(),
                         boot_id: None,
                         invocation_id: None,
                         cursor: None,
@@ -540,6 +543,7 @@ impl App {
                             pid: None,
                             identifier: None,
                             message: format!("Error fetching logs: {}", e),
+                            message_styles: Vec::new(),
                             boot_id: None,
                             invocation_id: None,
                             cursor: None,
@@ -885,6 +889,8 @@ impl App {
         self.user_mode = !self.user_mode;
         self.system_logs_mode = false;
         self.last_selected_service = None;
+        // A pending post-action refresh belongs to the old scope.
+        self.refresh_receiver = None;
         self.invalidate_log_stream();
         self.logs.clear();
         self.invalidate_log_entry_heights_cache();
@@ -1049,8 +1055,19 @@ impl App {
                 if let Ok(units) = fetch_units(unit_type, user_mode, runner.as_ref()) {
                     let _ = refresh_tx.send(units);
                 }
+                // Unit state can still be settling right after the job
+                // completes (deactivating, auto-restart, oneshot exit);
+                // refetch once more so the list converges on the final state.
+                std::thread::sleep(std::time::Duration::from_millis(1500));
+                if let Ok(units) = fetch_units(unit_type, user_mode, runner.as_ref()) {
+                    let _ = refresh_tx.send(units);
+                }
             });
         }
+    }
+
+    pub fn refresh_in_flight(&self) -> bool {
+        self.refresh_receiver.is_some()
     }
 
     pub fn check_action_progress(&mut self) {
@@ -1064,14 +1081,28 @@ impl App {
                 self.mark_logs_dirty();
             }
         }
-        if let Some(ref rx) = self.refresh_receiver
-            && let Ok(units) = rx.try_recv()
-        {
-            self.refresh_receiver = None;
-            self.properties_cache.clear();
-            self.services = units;
-            self.last_refreshed = Some(chrono::Local::now());
-            self.update_filter();
+        // The action thread sends several list refreshes; apply everything
+        // queued and keep the receiver until the thread is done with it.
+        if let Some(rx) = self.refresh_receiver.take() {
+            let mut disconnected = false;
+            loop {
+                match rx.try_recv() {
+                    Ok(units) => {
+                        self.properties_cache.clear();
+                        self.services = units;
+                        self.last_refreshed = Some(chrono::Local::now());
+                        self.update_filter();
+                    }
+                    Err(mpsc::TryRecvError::Empty) => break,
+                    Err(mpsc::TryRecvError::Disconnected) => {
+                        disconnected = true;
+                        break;
+                    }
+                }
+            }
+            if !disconnected {
+                self.refresh_receiver = Some(rx);
+            }
         }
     }
 
@@ -1082,9 +1113,12 @@ impl App {
         self.action_in_progress = false;
         self.action_result = None;
         self.action_receiver = None;
-        self.refresh_receiver = None;
     }
 
+    // Note: the refresh receiver is deliberately kept alive here — dismissing
+    // the result popup must not discard a unit-list refresh that is still in
+    // flight (easily hit over SSH, where refetching takes a network round
+    // trip).
     pub fn dismiss_action_result(&mut self) {
         self.show_confirm = false;
         self.confirm_action = None;
@@ -1092,7 +1126,6 @@ impl App {
         self.action_in_progress = false;
         self.action_result = None;
         self.action_receiver = None;
-        self.refresh_receiver = None;
     }
 
     pub fn clear_status_message(&mut self) {
@@ -1241,6 +1274,7 @@ mod tests {
             pid: None,
             identifier: None,
             message: message.into(),
+            message_styles: Vec::new(),
             boot_id: None,
             invocation_id: None,
             cursor: None,
@@ -1336,6 +1370,58 @@ mod tests {
 
     fn test_app_empty() -> App {
         test_app_with_services(Vec::new())
+    }
+
+    // Post-action unit-list refresh
+
+    #[test]
+    fn test_dismiss_action_result_keeps_pending_refresh() {
+        let mut app = test_app_empty();
+        let (tx, rx) = mpsc::channel();
+        app.refresh_receiver = Some(rx);
+        app.action_result = Some(Ok("Start succeeded".into()));
+        app.dismiss_action_result();
+        assert!(
+            app.refresh_in_flight(),
+            "dismissing the popup must not discard the refresh"
+        );
+
+        // The refresh that arrives after dismissal still lands.
+        tx.send(vec![make_unit("late.service", "running", "Late", None)])
+            .unwrap();
+        app.check_action_progress();
+        assert_eq!(app.services.len(), 1);
+        assert_eq!(app.services[0].unit, "late.service");
+    }
+
+    #[test]
+    fn test_check_action_progress_applies_all_queued_refreshes() {
+        let mut app = test_app_empty();
+        let (tx, rx) = mpsc::channel();
+        app.refresh_receiver = Some(rx);
+        tx.send(vec![make_unit("first.service", "activating", "First", None)])
+            .unwrap();
+        tx.send(vec![make_unit("second.service", "running", "Second", None)])
+            .unwrap();
+        app.check_action_progress();
+        assert_eq!(app.services[0].unit, "second.service", "latest refresh wins");
+        // Channel still open: keep waiting for the delayed refetch.
+        assert!(app.refresh_in_flight());
+        drop(tx);
+        app.check_action_progress();
+        assert!(
+            !app.refresh_in_flight(),
+            "receiver dropped once the thread is done"
+        );
+    }
+
+    #[test]
+    fn test_toggle_user_mode_drops_stale_refresh() {
+        let mut app = test_app_empty();
+        let (_tx, rx) = mpsc::channel::<Vec<SystemdUnit>>();
+        app.refresh_receiver = Some(rx);
+        app.toggle_user_mode();
+        assert!(!app.refresh_in_flight());
     }
 
     // Async live-tail refresh
