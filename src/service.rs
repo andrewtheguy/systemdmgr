@@ -1,20 +1,12 @@
 use chrono::TimeZone;
-use crossterm::{
-    event::{self, Event, KeyCode, KeyEventKind, KeyModifiers},
-    terminal::{disable_raw_mode, enable_raw_mode, is_raw_mode_enabled},
-};
 use ratatui::style::Color;
-use ssh2::{KeyboardInteractivePrompt, Prompt};
 
 /// Muted foreground color for inactive/dimmed states (visible on DarkGray highlight)
 pub const COLOR_MUTED: Color = Color::Rgb(100, 100, 100);
 use serde::Deserialize;
 use std::collections::HashMap;
-use std::io::{self, Read as _, Write as _};
-use std::net::{TcpStream, ToSocketAddrs};
 use std::process::{Command, Stdio};
-use std::sync::{Arc, Mutex};
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 pub struct CommandOutput {
     pub success: bool,
@@ -81,8 +73,17 @@ fn parse_systemd_version(output: &str) -> Option<u32> {
     digits.parse().ok()
 }
 
+/// Runs commands on a remote host by invoking the system OpenSSH client.
+///
+/// A ControlMaster connection is established interactively on connect (so ssh
+/// can prompt for passwords, key passphrases, and host key verification on the
+/// real terminal) and every subsequent command multiplexes over that master
+/// socket in batch mode.
 pub struct SshRunner {
-    session: Arc<Mutex<ssh2::Session>>,
+    destination: String,
+    port: Option<u16>,
+    identity_files: Vec<std::path::PathBuf>,
+    control_dir: std::path::PathBuf,
 }
 
 fn shell_quote(arg: &str) -> String {
@@ -103,551 +104,147 @@ fn expand_identity_path(path: std::path::PathBuf) -> std::path::PathBuf {
     path
 }
 
+/// Splits a `[user@]host[:port]` CLI destination into the ssh destination
+/// string and an optional port.
+fn parse_ssh_destination(host: &str) -> Result<(String, Option<u16>), String> {
+    let (user, rest) = match host.rsplit_once('@') {
+        Some((user, rest)) => (Some(user), rest),
+        None => (None, host),
+    };
+
+    let (host_part, port) = if let Some((h, p)) = rest.rsplit_once(':') {
+        (h, Some(p.parse::<u16>().map_err(|_| format!("Invalid port: {}", p))?))
+    } else {
+        (rest, None)
+    };
+
+    if host_part.is_empty() {
+        return Err(format!("Invalid SSH destination: {}", host));
+    }
+
+    let destination = match user {
+        Some(user) => format!("{}@{}", user, host_part),
+        None => host_part.to_string(),
+    };
+    Ok((destination, port))
+}
+
+fn join_remote_command(program: &str, args: &[&str]) -> String {
+    std::iter::once(program)
+        .chain(args.iter().copied())
+        .map(shell_quote)
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+fn create_control_dir() -> Result<std::path::PathBuf, String> {
+    use std::os::unix::fs::DirBuilderExt;
+    let dir = std::env::temp_dir().join(format!("systemdmgr-ssh-{}", std::process::id()));
+    std::fs::DirBuilder::new()
+        .recursive(true)
+        .mode(0o700)
+        .create(&dir)
+        .map_err(|e| format!("Failed to create SSH control directory {}: {}", dir.display(), e))?;
+    Ok(dir)
+}
+
 impl SshRunner {
     pub fn connect(host: &str, identity_files: Vec<std::path::PathBuf>) -> Result<Self, String> {
-        let mut parsed = SshHostConfig::resolve(host)?;
-        if !identity_files.is_empty() {
-            parsed.identity_files = identity_files.into_iter().map(expand_identity_path).collect();
-            parsed.identity_files_override = true;
-        }
-
-        let addr = format!("{}:{}", parsed.hostname, parsed.port);
-        let socket_addr = (parsed.hostname.as_str(), parsed.port)
-            .to_socket_addrs()
-            .map_err(|e| format!("Failed to connect to {}: {}", addr, e))?
-            .next()
-            .ok_or_else(|| format!("Failed to connect to {}: no socket addresses resolved", addr))?;
-        let tcp = TcpStream::connect_timeout(&socket_addr, Duration::from_secs(30))
-            .map_err(|e| format!("Failed to connect to {}: {}", addr, e))?;
-
-        let mut session = ssh2::Session::new()
-            .map_err(|e| format!("Failed to create SSH session: {}", e))?;
-        session.set_tcp_stream(tcp);
-        session.handshake()
-            .map_err(|e| format!("SSH handshake failed: {}", e))?;
-        session.set_keepalive(true, 60);
-
-        authenticate_session(&session, &parsed)?;
-
-        Ok(SshRunner {
-            session: Arc::new(Mutex::new(session)),
-        })
+        let (destination, port) = parse_ssh_destination(host)?;
+        let runner = SshRunner {
+            destination,
+            port,
+            identity_files: identity_files.into_iter().map(expand_identity_path).collect(),
+            control_dir: create_control_dir()?,
+        };
+        runner.open_master()?;
+        Ok(runner)
     }
 
-}
-
-fn authenticate_session(session: &ssh2::Session, parsed: &SshHostConfig) -> Result<(), String> {
-    let mut errors = Vec::new();
-    let auth_methods = match session.auth_methods(&parsed.user) {
-        Ok(methods) => Some(methods.to_string()),
-        Err(err) => {
-            errors.push(format!("auth methods: {}", err));
-            None
+    /// Common ssh CLI arguments. `batch_mode` disables prompts and log noise
+    /// for command execution inside the TUI; the initial master connection
+    /// runs without it so ssh can interact with the terminal.
+    fn ssh_args(&self, batch_mode: bool) -> Vec<String> {
+        let mut args = vec![
+            "-o".to_string(),
+            format!("ControlPath={}/%C", self.control_dir.display()),
+            "-o".to_string(),
+            "ControlMaster=auto".to_string(),
+            "-o".to_string(),
+            "ControlPersist=yes".to_string(),
+            "-o".to_string(),
+            "ServerAliveInterval=60".to_string(),
+        ];
+        if batch_mode {
+            args.push("-o".to_string());
+            args.push("BatchMode=yes".to_string());
+            args.push("-o".to_string());
+            args.push("LogLevel=ERROR".to_string());
         }
-    };
-    if session.authenticated() {
-        return Ok(());
+        if let Some(port) = self.port {
+            args.push("-p".to_string());
+            args.push(port.to_string());
+        }
+        for path in &self.identity_files {
+            args.push("-i".to_string());
+            args.push(path.display().to_string());
+        }
+        args
     }
 
-    if auth_method_supported(auth_methods.as_deref(), "publickey") && parsed.identity_files_override {
-        authenticate_with_key_files(session, parsed, &mut errors);
-        if session.authenticated() {
-            return Ok(());
-        }
-    }
-
-    if auth_method_supported(auth_methods.as_deref(), "publickey") {
-        authenticate_with_agent(session, parsed, &mut errors);
-        if session.authenticated() {
-            return Ok(());
-        }
-    }
-
-    if auth_method_supported(auth_methods.as_deref(), "publickey") && !parsed.identity_files_override {
-        authenticate_with_key_files(session, parsed, &mut errors);
-        if session.authenticated() {
-            return Ok(());
-        }
-    }
-
-    if auth_method_supported(auth_methods.as_deref(), "hostbased") {
-        authenticate_with_hostbased(session, parsed, &mut errors);
-        if session.authenticated() {
-            return Ok(());
-        }
-    }
-
-    if auth_method_supported(auth_methods.as_deref(), "keyboard-interactive") {
-        let mut prompter = TerminalKeyboardInteractive::default();
-        match session.userauth_keyboard_interactive(&parsed.user, &mut prompter) {
-            Ok(()) if session.authenticated() => return Ok(()),
-            Ok(()) => errors.push("keyboard-interactive: server did not complete authentication".to_string()),
-            Err(err) => errors.push(format!("keyboard-interactive: {}", err)),
-        }
-        if let Some(err) = prompter.error {
-            return Err(format!("SSH authentication failed: {}", err));
-        }
-        if session.authenticated() {
-            return Ok(());
-        }
-    }
-
-    if auth_method_supported(auth_methods.as_deref(), "password") {
-        authenticate_with_password(session, parsed, &mut errors)?;
-        if session.authenticated() {
-            return Ok(());
-        }
-    }
-
-    if errors.is_empty() {
-        Err("SSH authentication failed: no supported authentication methods succeeded".to_string())
-    } else {
-        Err(format!(
-            "SSH authentication failed: no supported authentication methods succeeded ({})",
-            errors.join("; ")
-        ))
-    }
-}
-
-fn auth_method_supported(methods: Option<&str>, method: &str) -> bool {
-    methods.is_none_or(|methods| {
-        methods.split(',').any(|candidate| candidate.trim() == method)
-    })
-}
-
-fn authenticate_with_key_files(
-    session: &ssh2::Session,
-    parsed: &SshHostConfig,
-    errors: &mut Vec<String>,
-) {
-    let home = std::env::var("HOME").unwrap_or_default();
-    let default_keys: Vec<std::path::PathBuf> = ["id_ed25519", "id_rsa", "id_ecdsa"]
-        .iter()
-        .map(|k| std::path::PathBuf::from(format!("{}/.ssh/{}", home, k)))
-        .collect();
-    let candidates = if parsed.identity_files.is_empty() {
-        &default_keys
-    } else {
-        &parsed.identity_files
-    };
-
-    for path in candidates {
-        if !path.exists() {
-            if parsed.identity_files_override {
-                errors.push(format!("key {}: file not found", path.display()));
-            }
-            continue;
-        }
-        match session.userauth_pubkey_file(&parsed.user, None, path, None) {
-            Ok(()) if session.authenticated() => return,
-            Ok(()) => break,
-            Err(err) => errors.push(format!("key {}: {}", path.display(), err)),
-        }
-        if session.authenticated() {
-            return;
+    fn open_master(&self) -> Result<(), String> {
+        let status = Command::new("ssh")
+            .args(self.ssh_args(false))
+            .arg("--")
+            .arg(&self.destination)
+            .arg("true")
+            .status()
+            .map_err(|e| format!("Failed to run ssh (is the OpenSSH client installed?): {}", e))?;
+        if status.success() {
+            Ok(())
+        } else {
+            Err(format!("ssh could not connect to {}", self.destination))
         }
     }
 }
 
-fn authenticate_with_agent(
-    session: &ssh2::Session,
-    parsed: &SshHostConfig,
-    errors: &mut Vec<String>,
-) {
-    let mut agent = match session.agent() {
-        Ok(agent) => agent,
-        Err(err) => {
-            errors.push(format!("SSH agent: {}", err));
-            return;
-        }
-    };
-    if let Err(err) = agent.connect() {
-        errors.push(format!("SSH agent: {}", err));
-        return;
-    }
-    if let Err(err) = agent.list_identities() {
-        errors.push(format!("SSH agent: {}", err));
-        let _ = agent.disconnect();
-        return;
-    }
-    let identities = match agent.identities() {
-        Ok(identities) => identities,
-        Err(err) => {
-            errors.push(format!("SSH agent: {}", err));
-            let _ = agent.disconnect();
-            return;
-        }
-    };
-    if identities.is_empty() {
-        errors.push("SSH agent: no identities found in the ssh agent".to_string());
-        let _ = agent.disconnect();
-        return;
-    }
-
-    let mut last_error = None;
-    for identity in &identities {
-        match agent.userauth(&parsed.user, identity) {
-            Ok(()) if session.authenticated() => {
-                let _ = agent.disconnect();
-                return;
-            }
-            Ok(()) => {}
-            Err(err) => last_error = Some(err.to_string()),
-        }
-        if session.authenticated() {
-            let _ = agent.disconnect();
-            return;
-        }
-    }
-    let _ = agent.disconnect();
-
-    if let Some(err) = last_error {
-        errors.push(format!("SSH agent: {}", err));
-    } else {
-        errors.push("SSH agent: no loaded identity was accepted".to_string());
-    }
-}
-
-fn authenticate_with_hostbased(
-    session: &ssh2::Session,
-    parsed: &SshHostConfig,
-    errors: &mut Vec<String>,
-) {
-    let hostname = local_hostname();
-    let local_username = std::env::var("USER").unwrap_or_else(|_| parsed.user.clone());
-    let candidates = [
-        ("/etc/ssh/ssh_host_ed25519_key.pub", "/etc/ssh/ssh_host_ed25519_key"),
-        ("/etc/ssh/ssh_host_ecdsa_key.pub", "/etc/ssh/ssh_host_ecdsa_key"),
-        ("/etc/ssh/ssh_host_rsa_key.pub", "/etc/ssh/ssh_host_rsa_key"),
-    ];
-    let mut tried = false;
-
-    for (public_key, private_key) in candidates {
-        let public_key = std::path::Path::new(public_key);
-        let private_key = std::path::Path::new(private_key);
-        if !public_key.exists() || std::fs::File::open(private_key).is_err() {
-            continue;
-        }
-
-        tried = true;
-        match session.userauth_hostbased_file(
-            &parsed.user,
-            public_key,
-            private_key,
-            None,
-            &hostname,
-            Some(&local_username),
-        ) {
-            Ok(()) if session.authenticated() => return,
-            Ok(()) => {}
-            Err(err) => errors.push(format!("hostbased {}: {}", private_key.display(), err)),
-        }
-        if session.authenticated() {
-            return;
-        }
-    }
-
-    if !tried {
-        errors.push("hostbased: no readable local host key found".to_string());
-    }
-}
-
-fn local_hostname() -> String {
-    std::env::var("HOSTNAME")
-        .ok()
-        .filter(|hostname| !hostname.trim().is_empty())
-        .or_else(|| {
-            std::fs::read_to_string("/etc/hostname")
-                .ok()
-                .map(|hostname| hostname.trim().to_string())
-                .filter(|hostname| !hostname.is_empty())
-        })
-        .unwrap_or_else(|| "localhost".to_string())
-}
-
-fn authenticate_with_password(
-    session: &ssh2::Session,
-    parsed: &SshHostConfig,
-    errors: &mut Vec<String>,
-) -> Result<(), String> {
-    for attempt in 1..=3 {
-        let prompt = format!("{}@{}'s password: ", parsed.user, parsed.hostname);
-        let password = read_hidden_prompted_line(&prompt)
-            .map_err(|err| format!("SSH authentication failed: failed to read password: {}", err))?;
-
-        match session.userauth_password(&parsed.user, &password) {
-            Ok(()) if session.authenticated() => return Ok(()),
-            Ok(()) => errors.push("password: server did not complete authentication".to_string()),
-            Err(err) => {
-                if attempt == 3 {
-                    errors.push(format!("password: {}", err));
-                } else {
-                    eprintln!("Permission denied, please try again.");
-                }
-            }
-        }
-        if session.authenticated() {
-            return Ok(());
-        }
-    }
-
-    Ok(())
-}
-
-#[derive(Default)]
-struct TerminalKeyboardInteractive {
-    error: Option<String>,
-}
-
-impl KeyboardInteractivePrompt for TerminalKeyboardInteractive {
-    fn prompt<'a>(
-        &mut self,
-        _username: &str,
-        instructions: &str,
-        prompts: &[Prompt<'a>],
-    ) -> Vec<String> {
-        if self.error.is_some() {
-            return vec![String::new(); prompts.len()];
-        }
-
-        if !instructions.is_empty() {
-            eprint!("{instructions}");
-            if !instructions.ends_with('\n') {
-                eprintln!();
-            }
-        }
-
-        let mut responses = Vec::with_capacity(prompts.len());
-        for prompt in prompts {
-            match read_keyboard_interactive_response(prompt) {
-                Ok(response) => responses.push(response),
-                Err(err) => {
-                    self.error = Some(format!(
-                        "failed to read keyboard-interactive response: {}",
-                        err
-                    ));
-                    while responses.len() < prompts.len() {
-                        responses.push(String::new());
-                    }
-                    break;
-                }
-            }
-        }
-        responses
-    }
-}
-
-fn read_keyboard_interactive_response(prompt: &Prompt<'_>) -> io::Result<String> {
-    if prompt.echo {
-        eprint!("{}", prompt.text);
-        io::stderr().flush()?;
-        read_echoed_terminal_line()
-    } else {
-        read_hidden_prompted_line(&prompt.text)
-    }
-}
-
-fn read_hidden_prompted_line(prompt: &str) -> io::Result<String> {
-    eprint!("{prompt}");
-    io::stderr().flush()?;
-    read_hidden_terminal_line()
-}
-
-fn read_echoed_terminal_line() -> io::Result<String> {
-    let mut response = String::new();
-    let bytes_read = io::stdin().read_line(&mut response)?;
-    if bytes_read == 0 {
-        return Err(io::Error::new(io::ErrorKind::UnexpectedEof, "end of input"));
-    }
-    trim_line_end(&mut response);
-    Ok(response)
-}
-
-fn trim_line_end(value: &mut String) {
-    if value.ends_with('\n') {
-        value.pop();
-        if value.ends_with('\r') {
-            value.pop();
-        }
-    }
-}
-
-struct RawModeGuard {
-    enabled_by_us: bool,
-}
-
-impl RawModeGuard {
-    fn enable() -> io::Result<Self> {
-        let was_enabled = is_raw_mode_enabled()?;
-        if !was_enabled {
-            enable_raw_mode()?;
-        }
-        Ok(Self {
-            enabled_by_us: !was_enabled,
-        })
-    }
-}
-
-impl Drop for RawModeGuard {
+impl Drop for SshRunner {
     fn drop(&mut self) {
-        if self.enabled_by_us {
-            let _ = disable_raw_mode();
-        }
-    }
-}
-
-fn read_hidden_terminal_line() -> io::Result<String> {
-    let _raw_mode = RawModeGuard::enable()?;
-    let mut response = String::new();
-
-    loop {
-        match event::read()? {
-            Event::Key(key) if key.kind == KeyEventKind::Press => match key.code {
-                KeyCode::Enter => {
-                    eprint!("\r\n");
-                    return Ok(response);
-                }
-                KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                    eprint!("\r\n");
-                    return Err(io::Error::new(io::ErrorKind::Interrupted, "interrupted"));
-                }
-                KeyCode::Char('d')
-                    if key.modifiers.contains(KeyModifiers::CONTROL) && response.is_empty() =>
-                {
-                    eprint!("\r\n");
-                    return Err(io::Error::new(io::ErrorKind::UnexpectedEof, "end of input"));
-                }
-                KeyCode::Char(c)
-                    if !key.modifiers.contains(KeyModifiers::CONTROL)
-                        && !key.modifiers.contains(KeyModifiers::ALT) =>
-                {
-                    response.push(c);
-                }
-                KeyCode::Backspace => {
-                    response.pop();
-                }
-                _ => {}
-            },
-            Event::Paste(text) => response.push_str(&text),
-            _ => {}
-        }
+        let _ = Command::new("ssh")
+            .args(self.ssh_args(true))
+            .args(["-O", "exit", "--"])
+            .arg(&self.destination)
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status();
+        let _ = std::fs::remove_dir_all(&self.control_dir);
     }
 }
 
 impl CommandRunner for SshRunner {
     fn run(&self, program: &str, args: &[&str]) -> Result<CommandOutput, String> {
-        let session = self.session.lock()
-            .map_err(|e| format!("Session lock poisoned: {}", e))?;
-        let mut channel = session.channel_session()
-            .map_err(|e| format!("Failed to open SSH channel: {}", e))?;
+        let output = Command::new("ssh")
+            .stdin(Stdio::null())
+            .args(self.ssh_args(true))
+            .arg("--")
+            .arg(&self.destination)
+            .arg(join_remote_command(program, args))
+            .output()
+            .map_err(|e| format!("Failed to run ssh: {}", e))?;
 
-        let cmd = std::iter::once(program)
-            .chain(args.iter().map(|a| a as &str))
-            .map(shell_quote)
-            .collect::<Vec<_>>()
-            .join(" ");
-
-        channel.exec(&cmd)
-            .map_err(|e| format!("Failed to execute command: {}", e))?;
-
-        let mut stdout = Vec::new();
-        channel.read_to_end(&mut stdout)
-            .map_err(|e| format!("Failed to read stdout: {}", e))?;
-
-        let mut stderr = Vec::new();
-        channel.stderr().read_to_end(&mut stderr)
-            .map_err(|e| format!("Failed to read stderr: {}", e))?;
-
-        channel.wait_close()
-            .map_err(|e| format!("Failed to close channel: {}", e))?;
-        let exit_status = channel.exit_status().unwrap_or(-1);
+        // ssh exits 255 on transport/auth errors; anything else is the
+        // remote command's own exit status.
+        if output.status.code() == Some(255) {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            return Err(format!("SSH error: {}", stderr.trim()));
+        }
 
         Ok(CommandOutput {
-            success: exit_status == 0,
-            stdout,
-            stderr,
+            success: output.status.success(),
+            stdout: output.stdout,
+            stderr: output.stderr,
         })
-    }
-}
-
-struct SshHostConfig {
-    hostname: String,
-    port: u16,
-    user: String,
-    identity_files: Vec<std::path::PathBuf>,
-    identity_files_override: bool,
-}
-
-impl SshHostConfig {
-    fn resolve(host: &str) -> Result<Self, String> {
-        let (cli_user, rest) = if let Some((u, r)) = host.split_once('@') {
-            (Some(u.to_string()), r)
-        } else {
-            (None, host)
-        };
-
-        let (host_alias, cli_port) = if let Some((h, p)) = rest.rsplit_once(':') {
-            (h, Some(p.parse::<u16>().map_err(|_| format!("Invalid port: {}", p))?))
-        } else {
-            (rest, None)
-        };
-
-        let default_user = std::env::var("USER").unwrap_or_else(|_| "root".to_string());
-        let home = std::env::var("HOME").unwrap_or_default();
-        let has_cli_user = cli_user.is_some();
-
-        let mut config = SshHostConfig {
-            hostname: host_alias.to_string(),
-            port: cli_port.unwrap_or(22),
-            user: cli_user.unwrap_or(default_user),
-            identity_files: Vec::new(),
-            identity_files_override: false,
-        };
-
-        let config_path = format!("{}/.ssh/config", home);
-        if let Ok(content) = std::fs::read_to_string(&config_path) {
-            config.apply_ssh_config(&content, host_alias, has_cli_user, cli_port.is_some());
-        }
-
-        Ok(config)
-    }
-
-    fn apply_ssh_config(
-        &mut self,
-        content: &str,
-        host_alias: &str,
-        has_cli_user: bool,
-        has_cli_port: bool,
-    ) {
-        let mut reader = std::io::BufReader::new(content.as_bytes());
-        let parsed = match ssh2_config::SshConfig::default()
-            .parse(&mut reader, ssh2_config::ParseRule::ALLOW_UNKNOWN_FIELDS | ssh2_config::ParseRule::ALLOW_UNSUPPORTED_FIELDS)
-        {
-            Ok(c) => c,
-            Err(e) => {
-                eprintln!("Warning: failed to parse ~/.ssh/config for host {}: {}", host_alias, e);
-                return;
-            }
-        };
-
-        let params = parsed.query(host_alias);
-
-        if let Some(hostname) = params.host_name {
-            self.hostname = hostname;
-        }
-        if let Some(port) = params.port
-            && !has_cli_port
-        {
-            self.port = port;
-        }
-        if let Some(user) = params.user
-            && !has_cli_user
-        {
-            self.user = user;
-        }
-        if let Some(files) = params.identity_file {
-            self.identity_files = files.into_iter().map(expand_identity_path).collect();
-        }
     }
 }
 
@@ -1470,113 +1067,115 @@ mod tests {
         assert_eq!(parse_systemd_version("not systemd\n"), None);
     }
 
+    // SSH destination parsing
+
     #[test]
-    fn test_ssh_config_host_glob_applies_matching_block() {
-        let mut config = SshHostConfig {
-            hostname: "api.example.com".into(),
-            port: 22,
-            user: "debian".into(),
-            identity_files: Vec::new(),
-            identity_files_override: false,
-        };
-
-        config.apply_ssh_config(
-            r#"
-Host *.example.com
-    HostName internal.example.com
-    User deploy
-"#,
-            "api.example.com",
-            false,
-            false,
+    fn test_parse_ssh_destination_host_only() {
+        assert_eq!(
+            parse_ssh_destination("myserver"),
+            Ok(("myserver".to_string(), None))
         );
-
-        assert_eq!(config.hostname, "internal.example.com");
-        assert_eq!(config.user, "deploy");
     }
 
     #[test]
-    fn test_ssh_config_exact_host_match() {
-        let mut config = SshHostConfig {
-            hostname: "myserver".into(),
-            port: 22,
-            user: "debian".into(),
-            identity_files: Vec::new(),
-            identity_files_override: false,
-        };
-
-        config.apply_ssh_config(
-            "Host myserver\n    HostName 10.0.0.1\n    Port 2222\n    User admin\n",
-            "myserver",
-            false,
-            false,
+    fn test_parse_ssh_destination_user_host() {
+        assert_eq!(
+            parse_ssh_destination("deploy@myserver"),
+            Ok(("deploy@myserver".to_string(), None))
         );
-
-        assert_eq!(config.hostname, "10.0.0.1");
-        assert_eq!(config.port, 2222);
-        assert_eq!(config.user, "admin");
     }
 
     #[test]
-    fn test_ssh_config_no_match() {
-        let mut config = SshHostConfig {
-            hostname: "other".into(),
-            port: 22,
-            user: "debian".into(),
-            identity_files: Vec::new(),
-            identity_files_override: false,
-        };
-
-        config.apply_ssh_config(
-            "Host myserver\n    HostName 10.0.0.1\n    User admin\n",
-            "other",
-            false,
-            false,
+    fn test_parse_ssh_destination_user_host_port() {
+        assert_eq!(
+            parse_ssh_destination("deploy@myserver:2222"),
+            Ok(("deploy@myserver".to_string(), Some(2222)))
         );
-
-        assert_eq!(config.hostname, "other");
-        assert_eq!(config.user, "debian");
     }
 
     #[test]
-    fn test_ssh_config_cli_port_not_overridden() {
-        let mut config = SshHostConfig {
-            hostname: "myserver".into(),
-            port: 3333,
-            user: "debian".into(),
-            identity_files: Vec::new(),
-            identity_files_override: false,
-        };
-
-        config.apply_ssh_config(
-            "Host myserver\n    Port 2222\n",
-            "myserver",
-            false,
-            true,
+    fn test_parse_ssh_destination_host_port() {
+        assert_eq!(
+            parse_ssh_destination("myserver:2222"),
+            Ok(("myserver".to_string(), Some(2222)))
         );
-
-        assert_eq!(config.port, 3333);
     }
 
     #[test]
-    fn test_ssh_config_cli_user_not_overridden() {
-        let mut config = SshHostConfig {
-            hostname: "myserver".into(),
-            port: 22,
-            user: "cli-user".into(),
-            identity_files: Vec::new(),
-            identity_files_override: false,
-        };
+    fn test_parse_ssh_destination_invalid_port() {
+        assert!(parse_ssh_destination("myserver:notaport").is_err());
+    }
 
-        config.apply_ssh_config(
-            "Host myserver\n    HostName 10.0.0.1\n    User admin\n",
-            "myserver",
-            true,
-            false,
+    #[test]
+    fn test_parse_ssh_destination_empty_host() {
+        assert!(parse_ssh_destination("deploy@:2222").is_err());
+        assert!(parse_ssh_destination("").is_err());
+    }
+
+    // shell_quote / join_remote_command
+
+    #[test]
+    fn test_shell_quote_plain() {
+        assert_eq!(shell_quote("systemctl"), "systemctl");
+        assert_eq!(shell_quote("--type=service"), "--type=service");
+    }
+
+    #[test]
+    fn test_shell_quote_empty() {
+        assert_eq!(shell_quote(""), "''");
+    }
+
+    #[test]
+    fn test_shell_quote_spaces() {
+        assert_eq!(shell_quote("15 min ago"), "'15 min ago'");
+    }
+
+    #[test]
+    fn test_shell_quote_single_quote() {
+        assert_eq!(shell_quote("it's"), "'it'\\''s'");
+    }
+
+    #[test]
+    fn test_join_remote_command() {
+        assert_eq!(
+            join_remote_command("journalctl", &["--since", "15 min ago"]),
+            "journalctl --since '15 min ago'"
         );
+    }
 
-        assert_eq!(config.hostname, "10.0.0.1");
-        assert_eq!(config.user, "cli-user");
+    // SshRunner argument construction
+
+    fn make_ssh_runner() -> SshRunner {
+        SshRunner {
+            destination: "deploy@myserver".into(),
+            port: Some(2222),
+            identity_files: vec![std::path::PathBuf::from("/keys/deploy_key")],
+            control_dir: std::path::PathBuf::from("/nonexistent/ctl"),
+        }
+    }
+
+    #[test]
+    fn test_ssh_args_batch_mode() {
+        let runner = make_ssh_runner();
+        let args = runner.ssh_args(true);
+        assert!(args.contains(&"ControlPath=/nonexistent/ctl/%C".to_string()));
+        assert!(args.contains(&"ControlMaster=auto".to_string()));
+        assert!(args.contains(&"ControlPersist=yes".to_string()));
+        assert!(args.contains(&"BatchMode=yes".to_string()));
+        let port_pos = args.iter().position(|a| a == "-p").unwrap();
+        assert_eq!(args[port_pos + 1], "2222");
+        let key_pos = args.iter().position(|a| a == "-i").unwrap();
+        assert_eq!(args[key_pos + 1], "/keys/deploy_key");
+        std::mem::forget(runner); // avoid Drop invoking ssh -O exit in tests
+    }
+
+    #[test]
+    fn test_ssh_args_interactive_has_no_batch_mode() {
+        let runner = make_ssh_runner();
+        let args = runner.ssh_args(false);
+        assert!(!args.contains(&"BatchMode=yes".to_string()));
+        assert!(!args.contains(&"LogLevel=ERROR".to_string()));
+        std::mem::forget(runner);
     }
 
     // Phase 2 — UnitType::label

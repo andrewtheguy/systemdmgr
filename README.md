@@ -71,7 +71,7 @@ systemdmgr --ssh user@server
 systemdmgr --ssh user@server --ssh-identity-file ~/.ssh/deploy_key
 ```
 
-Authenticates via none, SSH agent, unencrypted key files, hostbased auth, keyboard-interactive prompts such as OTP/MFA, or password prompts, then reuses a single connection for all commands. Supports `~/.ssh/config` Host aliases, custom ports, and identity files. Add passphrase-protected keys to `ssh-agent`; direct key-file authentication does not prompt for private key passphrases. `--user` mode works over SSH (requires `loginctl enable-linger` on the remote).
+Connectivity is delegated to the system OpenSSH client: authentication (agent, keys, password, OTP/MFA), host key verification, `~/.ssh/config` (including `ProxyJump` and `Match`), and passphrase prompts all work exactly as they do for plain `ssh`. A single multiplexed connection (ControlMaster) is reused for all commands. `--user` mode works over SSH (requires `loginctl enable-linger` on the remote).
 
 See [docs/ssh.md](docs/ssh.md) for full details on host resolution, authentication, and troubleshooting.
 
@@ -160,7 +160,7 @@ Press `?` in the app to see context-sensitive help.
 - Rust 1.85+ (2024 edition)
 - **Linux:** systemd 246+ with `systemctl` on `PATH` (local host, or remote host when using `--ssh`)
 - **macOS:** SSH remote management only (`--ssh` flag required; the remote host must have systemd)
-- OpenSSL/libssl (for remote management via `--ssh`)
+- OpenSSH client (`ssh` on `PATH`) for remote management via `--ssh`
 
 ## License
 

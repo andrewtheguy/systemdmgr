@@ -2210,8 +2210,10 @@ mod tests {
         let mut app = test_app_with_services(vec![
             make_unit("test.service", "running", "Test", None),
         ]);
-        let mut props = UnitProperties::default();
-        props.description = "Cached description".into();
+        let props = UnitProperties {
+            description: "Cached description".into(),
+            ..Default::default()
+        };
         app.properties_cache
             .insert("test.service".into(), props);
 

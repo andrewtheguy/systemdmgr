@@ -26,15 +26,14 @@ src/
 ### Remote Management (SSH)
 
 - Enabled via `--ssh user@server` CLI flag
-- Uses the `ssh2` crate (libssh2 bindings) for connectivity and `ssh2-config` for config parsing — no dependency on the system `ssh` binary
-- A single TCP connection is opened and reused for all commands via `ssh2::Session`
-- Parses `~/.ssh/config` via `ssh2-config` and applies Host aliases, HostName, Port, User, and IdentityFile
-- Supports `--ssh-identity-file` for explicit unencrypted private key files
-- Authentication via none, SSH agent, unencrypted key files, hostbased auth, keyboard-interactive prompts such as OTP/MFA, or password prompts
+- Delegates connectivity to the system OpenSSH client (`ssh` on `PATH`) — no bundled SSH library
+- An interactive ControlMaster connection is opened on startup; each command runs as an `ssh` subprocess multiplexed over the master socket (`BatchMode=yes`)
+- Full `~/.ssh/config` semantics, authentication methods (agent, passphrase-protected keys, password, OTP/MFA), host key handling, and jump hosts — all handled by ssh itself
+- Supports `--ssh-identity-file`, forwarded to ssh as `-i`
 - Remote target must have systemd 246+ with `systemctl` on `PATH`
 - Both system and user (`--user`) mode supported over SSH
 - Header displays remote host (e.g., `"SystemD Services [System] on user@server"`)
-- Connection cleanup via `Drop` on normal exit
+- Master connection closed (`ssh -O exit`) via `Drop` on normal exit
 - See [ssh.md](ssh.md) for full details
 
 ## UI Layout
