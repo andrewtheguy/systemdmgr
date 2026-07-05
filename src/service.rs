@@ -335,7 +335,13 @@ pub const UNIT_TYPES: [UnitType; 5] = [
 #[derive(Debug, Clone)]
 pub struct LogEntry {
     pub timestamp: Option<i64>,
+    /// Priority as recorded by journald. For services logging to
+    /// stdout/stderr this is the stream's blanket tag, not the message's own
+    /// severity.
     pub priority: Option<u8>,
+    /// Severity parsed from a level token inside the message text itself
+    /// (e.g. ` INFO ` from tracing/log frameworks), when present.
+    pub derived_priority: Option<u8>,
     pub pid: Option<String>,
     pub identifier: Option<String>,
     pub message: String,
@@ -343,6 +349,15 @@ pub struct LogEntry {
     pub invocation_id: Option<String>,
     pub cursor: Option<String>,
     pub unit: Option<String>,
+}
+
+impl LogEntry {
+    /// The severity to display: the message's own level token when it has
+    /// one, otherwise the journal priority. Filtering (`-p`) still uses the
+    /// journal priority on the journalctl side.
+    pub fn display_priority(&self) -> Option<u8> {
+        self.derived_priority.or(self.priority)
+    }
 }
 
 pub const PRIORITY_LABELS: [&str; 8] = [
@@ -668,11 +683,105 @@ pub fn fetch_log_entries_after_cursor(
     Ok(entries)
 }
 
+/// Removes ANSI escape sequences (CSI color/style codes, OSC sequences, and
+/// other two-character escapes) that services write into their stream output;
+/// journald stores them verbatim and they would render as garbage in the TUI.
+fn strip_ansi_codes(input: &str) -> String {
+    if !input.contains('\u{1b}') {
+        return input.to_string();
+    }
+    let mut out = String::with_capacity(input.len());
+    let mut chars = input.chars().peekable();
+    while let Some(c) = chars.next() {
+        if c != '\u{1b}' {
+            out.push(c);
+            continue;
+        }
+        match chars.peek() {
+            // CSI: ESC [ <params> <final byte in 0x40..=0x7E>
+            Some('[') => {
+                chars.next();
+                for c2 in chars.by_ref() {
+                    if ('\u{40}'..='\u{7e}').contains(&c2) {
+                        break;
+                    }
+                }
+            }
+            // OSC: ESC ] ... terminated by BEL or ST (ESC \)
+            Some(']') => {
+                chars.next();
+                while let Some(c2) = chars.next() {
+                    if c2 == '\u{7}' {
+                        break;
+                    }
+                    if c2 == '\u{1b}' {
+                        chars.next();
+                        break;
+                    }
+                }
+            }
+            // Other two-character escape (ESC c, ESC ( B, ...)
+            Some(_) => {
+                chars.next();
+            }
+            None => {}
+        }
+    }
+    out
+}
+
+/// Level tokens emitted by common logging frameworks, mapped to journal
+/// priorities. Longer tokens come first so boundary checks see them whole.
+const MESSAGE_LEVEL_TOKENS: [(&str, u8); 9] = [
+    ("CRITICAL", 2),
+    ("WARNING", 4),
+    ("NOTICE", 5),
+    ("TRACE", 7),
+    ("DEBUG", 7),
+    ("ERROR", 3),
+    ("FATAL", 2),
+    ("WARN", 4),
+    ("INFO", 6),
+];
+
+/// How far into the message a level token is searched for. Tokens appear near
+/// the start (after a timestamp at most); matching further would false-match
+/// on message content.
+const MESSAGE_LEVEL_WINDOW: usize = 64;
+
+/// Detects an uppercase severity token near the start of the message, so
+/// lines from services that log to stdout/stderr (which journald records
+/// under one blanket priority) can be displayed with their real level. The
+/// earliest standalone token wins.
+fn detect_message_level(message: &str) -> Option<u8> {
+    let window = &message.as_bytes()[..message.len().min(MESSAGE_LEVEL_WINDOW)];
+    let is_boundary =
+        |b: Option<&u8>| b.is_none_or(|b| !b.is_ascii_alphanumeric() && *b != b'_');
+
+    let mut earliest: Option<(usize, u8)> = None;
+    for (token, priority) in MESSAGE_LEVEL_TOKENS {
+        let token = token.as_bytes();
+        for start in 0..window.len().saturating_sub(token.len() - 1) {
+            if &window[start..start + token.len()] == token
+                && is_boundary(start.checked_sub(1).and_then(|i| window.get(i)))
+                && is_boundary(window.get(start + token.len()))
+            {
+                if earliest.is_none_or(|(pos, _)| start < pos) {
+                    earliest = Some((start, priority));
+                }
+                break;
+            }
+        }
+    }
+    earliest.map(|(_, priority)| priority)
+}
+
 fn parse_journal_json_line(line: &str) -> LogEntry {
     let Ok(val) = serde_json::from_str::<serde_json::Value>(line) else {
         return LogEntry {
             timestamp: None,
             priority: None,
+            derived_priority: None,
             pid: None,
             identifier: None,
             message: line.to_string(),
@@ -694,6 +803,8 @@ fn parse_journal_json_line(line: &str) -> LogEntry {
         }
         _ => line.to_string(),
     };
+    let message = strip_ansi_codes(&message);
+    let derived_priority = detect_message_level(&message);
 
     let priority = val["PRIORITY"]
         .as_str()
@@ -718,6 +829,7 @@ fn parse_journal_json_line(line: &str) -> LogEntry {
     LogEntry {
         timestamp,
         priority,
+        derived_priority,
         pid,
         identifier,
         message,
@@ -1546,6 +1658,97 @@ mod tests {
         let line = r#"{"MESSAGE":"test","PRIORITY":"abc"}"#;
         let entry = parse_journal_json_line(line);
         assert_eq!(entry.priority, None);
+    }
+
+    // strip_ansi_codes
+
+    #[test]
+    fn test_strip_ansi_plain_text_unchanged() {
+        assert_eq!(strip_ansi_codes("hello world"), "hello world");
+    }
+
+    #[test]
+    fn test_strip_ansi_sgr_codes_removed() {
+        assert_eq!(
+            strip_ansi_codes("\u{1b}[2mdim\u{1b}[0m \u{1b}[32mgreen\u{1b}[0m"),
+            "dim green"
+        );
+    }
+
+    #[test]
+    fn test_strip_ansi_osc_sequence_removed() {
+        assert_eq!(strip_ansi_codes("\u{1b}]0;title\u{7}text"), "text");
+    }
+
+    #[test]
+    fn test_strip_ansi_two_char_escape_removed() {
+        assert_eq!(strip_ansi_codes("a\u{1b}Mb"), "ab");
+    }
+
+    // detect_message_level
+
+    #[test]
+    fn test_detect_level_info() {
+        assert_eq!(detect_message_level("2026-07-05T03:55:55Z  INFO server: GET /x"), Some(6));
+    }
+
+    #[test]
+    fn test_detect_level_error() {
+        assert_eq!(detect_message_level("ERROR something broke"), Some(3));
+    }
+
+    #[test]
+    fn test_detect_level_warning_not_warn_prefix() {
+        assert_eq!(detect_message_level("WARNING: disk almost full"), Some(4));
+    }
+
+    #[test]
+    fn test_detect_level_earliest_token_wins() {
+        assert_eq!(detect_message_level("ERROR while reading INFO block"), Some(3));
+    }
+
+    #[test]
+    fn test_detect_level_requires_word_boundary() {
+        assert_eq!(detect_message_level("INFORMATION about INFOS"), None);
+    }
+
+    #[test]
+    fn test_detect_level_lowercase_not_matched() {
+        assert_eq!(detect_message_level("info: not a level token"), None);
+    }
+
+    #[test]
+    fn test_detect_level_none_without_token() {
+        assert_eq!(detect_message_level("Started Session 12 of User debian."), None);
+    }
+
+    #[test]
+    fn test_detect_level_token_beyond_window_ignored() {
+        let msg = format!("{} ERROR too late", "x".repeat(MESSAGE_LEVEL_WINDOW));
+        assert_eq!(detect_message_level(&msg), None);
+    }
+
+    // Stream-tagged stderr lines: journald says err, message says INFO
+
+    #[test]
+    fn test_parse_stderr_stream_line_uses_embedded_level_for_display() {
+        let line = r#"{"MESSAGE":"\u001b[2m2026-07-05T03:55:55.557072Z\u001b[0m \u001b[32m INFO\u001b[0m \u001b[2mgarage_api_common::generic_server\u001b[0m\u001b[2m:\u001b[0m GET /bucket/key","PRIORITY":"3"}"#;
+        let entry = parse_journal_json_line(line);
+        assert_eq!(
+            entry.message,
+            "2026-07-05T03:55:55.557072Z  INFO garage_api_common::generic_server: GET /bucket/key"
+        );
+        assert_eq!(entry.priority, Some(3), "journal priority is preserved");
+        assert_eq!(entry.derived_priority, Some(6));
+        assert_eq!(entry.display_priority(), Some(6), "display uses the real level");
+    }
+
+    #[test]
+    fn test_display_priority_falls_back_to_journal_priority() {
+        let line = r#"{"MESSAGE":"plain syslog message","PRIORITY":"4"}"#;
+        let entry = parse_journal_json_line(line);
+        assert_eq!(entry.derived_priority, None);
+        assert_eq!(entry.display_priority(), Some(4));
     }
 
     #[test]

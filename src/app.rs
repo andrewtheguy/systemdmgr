@@ -495,6 +495,7 @@ impl App {
                     self.logs = vec![LogEntry {
                         timestamp: None,
                         priority: None,
+                        derived_priority: None,
                         pid: None,
                         identifier: None,
                         message: format!("Error fetching logs: {}", e),
@@ -537,6 +538,7 @@ impl App {
                         self.logs = vec![LogEntry {
                             timestamp: None,
                             priority: None,
+                            derived_priority: None,
                             pid: None,
                             identifier: None,
                             message: format!("Error fetching logs: {}", e),
@@ -1238,6 +1240,7 @@ mod tests {
         LogEntry {
             timestamp: None,
             priority: None,
+            derived_priority: None,
             pid: None,
             identifier: None,
             message: message.into(),

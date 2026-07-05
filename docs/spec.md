@@ -144,6 +144,10 @@ src/
 
 **Byte-array messages:** journalctl sometimes returns `MESSAGE` as a byte array instead of a string — handled via UTF-8 lossy conversion.
 
+**ANSI escape codes:** color/style sequences that services write to stdout/stderr are stripped from messages before display and search.
+
+**Embedded level detection:** services that log to stdout/stderr get one blanket journal priority for the whole stream (often `err` for stderr), so the real severity lives in the message text. When an uppercase level token (`TRACE`, `DEBUG`, `INFO`, `NOTICE`, `WARN`/`WARNING`, `ERROR`, `FATAL`/`CRITICAL`) appears as a standalone word within the first 64 bytes of the message, it is used for the displayed `[label]` and line color instead of the journal priority. The journal priority is untouched and still drives the `-p` priority filter on the journalctl side.
+
 **Boundaries:** boot ID changes render a boot separator; per-unit invocation ID changes render a restart separator.
 
 **Priority filter** (`p` key):

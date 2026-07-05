@@ -860,13 +860,14 @@ fn render_log_entry<'a>(entry: &LogEntry, line_idx: usize, app: &App) -> Line<'a
         }
     }
 
-    // Priority label
-    let (msg_color, msg_bold) = entry
-        .priority
+    // Priority label — prefer the level embedded in the message text over
+    // journald's blanket stream priority (see LogEntry::display_priority).
+    let display_priority = entry.display_priority();
+    let (msg_color, msg_bold) = display_priority
         .map(priority_color)
         .unwrap_or((Color::White, false));
 
-    if let Some(p) = entry.priority {
+    if let Some(p) = display_priority {
         let label = priority_label(p);
         let (color, bold) = priority_color(p);
         let mut style = Style::default().fg(color);
@@ -1995,6 +1996,7 @@ mod tests {
         LogEntry {
             timestamp: None,
             priority: None,
+            derived_priority: None,
             pid: None,
             identifier: None,
             message: "msg".to_string(),
