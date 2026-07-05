@@ -53,9 +53,8 @@ fn main() -> io::Result<()> {
     }
 
     let (runner, host_label): (Arc<dyn CommandRunner>, Option<String>) = if let Some(ssh_args) = ssh_args {
-        // The destination is the last argument in ssh's `[options] destination`
-        // syntax; used only for display.
-        let label = ssh_args.last().cloned().unwrap_or_default();
+        let label =
+            service::ssh_destination(&ssh_args).unwrap_or_else(|| ssh_args.join(" "));
         eprintln!("Connecting to {label}...");
         match SshRunner::connect(ssh_args) {
             Ok(r) => (Arc::new(r), Some(label)),

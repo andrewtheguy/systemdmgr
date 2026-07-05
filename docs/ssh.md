@@ -26,15 +26,20 @@ Connection lifecycle:
 
 ## Command-Line Arguments
 
-Everything after `--ssh` is forwarded to the ssh client verbatim, using ssh's own `[options] destination` syntax — the same arguments you would give a plain `ssh` command:
+Everything after `--ssh` is forwarded to the ssh client. There is exactly one accepted form — ssh options first, destination last:
+
+```
+systemdmgr --ssh [ssh-options] destination
+```
 
 ```bash
 systemdmgr --ssh myserver
 systemdmgr --ssh deploy@myserver
 systemdmgr --ssh -p 2222 -i ~/.ssh/deploy_key deploy@myserver
 systemdmgr --ssh -J bastion deploy@myserver
-systemdmgr --ssh -- deploy@myserver
 ```
+
+Arguments after the destination are rejected with an error (in plain ssh those would be a remote command, which systemdmgr always supplies itself), and a `--` separator is rejected as unnecessary — systemdmgr inserts its own before the destination when invoking ssh.
 
 The destination can be anything your SSH setup resolves: a hostname, an IP address, a `Host` alias from `~/.ssh/config`, or a `ssh://user@host:port` URI. Options resolve exactly as they would for a plain `ssh` invocation.
 

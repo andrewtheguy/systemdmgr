@@ -75,20 +75,80 @@ fn parse_systemd_version(output: &str) -> Option<u32> {
 
 /// Runs commands on a remote host by invoking the system OpenSSH client.
 ///
-/// The CLI arguments after `--ssh` are forwarded to ssh verbatim, using ssh's
-/// own `[options] destination` syntax. A ControlMaster connection is
-/// established interactively on connect (so ssh can prompt for passwords, key
-/// passphrases, and host key verification on the real terminal) and every
-/// subsequent command multiplexes over that master socket in batch mode.
+/// The CLI arguments after `--ssh` use ssh's own `[options] destination`
+/// syntax. A ControlMaster connection is established interactively on connect
+/// (so ssh can prompt for passwords, key passphrases, verification codes, and
+/// host key verification on the real terminal) and every subsequent command
+/// multiplexes over that master socket in batch mode.
 ///
 /// The master is kept as a direct child process running `cat` on the remote
 /// host, with its stdin tied to a pipe this process holds. If this process
 /// dies without running `Drop` (SIGKILL, crash), the pipe closes, `cat` sees
 /// EOF, and the master shuts itself down — no orphaned ssh process.
 pub struct SshRunner {
-    ssh_cli_args: Vec<String>,
+    ssh_options: Vec<String>,
+    destination: String,
     control_dir: std::path::PathBuf,
     master: std::process::Child,
+}
+
+/// ssh option letters that take a value, from the ssh(1) usage string.
+const SSH_OPTS_WITH_ARG: &str = "BbcDEeFIiJLlmOoPpQRSWw";
+
+const SSH_USAGE: &str = "usage: --ssh [ssh-options] destination";
+
+/// Splits ssh CLI arguments into (options, destination).
+///
+/// There is exactly one accepted form: all ssh options first, the destination
+/// as the final argument. A `--` separator is rejected (systemdmgr inserts
+/// its own before the destination when invoking ssh), as are arguments after
+/// the destination — in plain ssh those would be a remote command, which
+/// systemdmgr always supplies itself.
+pub fn split_ssh_args(args: &[String]) -> Result<(Vec<String>, String), String> {
+    let mut options: Vec<String> = Vec::new();
+    let mut i = 0;
+    while i < args.len() {
+        let arg = &args[i];
+        if arg == "--" {
+            return Err(format!("'--' is not supported; {}", SSH_USAGE));
+        }
+        if !arg.starts_with('-') || arg == "-" {
+            // The destination must be the final argument.
+            if i + 1 != args.len() {
+                return Err(format!(
+                    "unexpected arguments after destination '{}': '{}'; {}",
+                    arg,
+                    args[i + 1..].join(" "),
+                    SSH_USAGE
+                ));
+            }
+            return Ok((options, arg.clone()));
+        }
+        options.push(arg.clone());
+        // Walk a cluster of short flags; a value-taking letter consumes the
+        // rest of the token, or the following argument if the token ends.
+        let mut letters = arg[1..].chars();
+        while let Some(letter) = letters.next() {
+            if SSH_OPTS_WITH_ARG.contains(letter) {
+                if letters.as_str().is_empty() {
+                    i += 1;
+                    let value = args.get(i).ok_or_else(|| {
+                        format!("ssh option -{} is missing its value", letter)
+                    })?;
+                    options.push(value.clone());
+                }
+                break;
+            }
+        }
+        i += 1;
+    }
+    Err(format!("no SSH destination given; {}", SSH_USAGE))
+}
+
+/// The destination within ssh-style `[options] destination` arguments, for
+/// display purposes.
+pub fn ssh_destination(args: &[String]) -> Option<String> {
+    split_ssh_args(args).ok().map(|(_, destination)| destination)
 }
 
 fn shell_quote(arg: &str) -> String {
@@ -171,17 +231,18 @@ fn multiplex_args(control_dir: &std::path::Path, batch_mode: bool) -> Vec<String
 impl SshRunner {
     /// `ssh_cli_args` uses ssh's own syntax: `[options] destination`,
     /// e.g. `["deploy@myserver"]` or `["-p", "2222", "-i", "key", "myserver"]`.
+    /// Options may also follow the destination.
     pub fn connect(ssh_cli_args: Vec<String>) -> Result<Self, String> {
-        if ssh_cli_args.is_empty() {
-            return Err("no SSH destination given".to_string());
-        }
+        let (ssh_options, destination) = split_ssh_args(&ssh_cli_args)?;
         let control_dir = create_control_dir()?;
 
         // Remote `cat` blocks on our pipe forever; the master stays up
         // exactly as long as this process is alive.
         let master = Command::new("ssh")
             .args(multiplex_args(&control_dir, false))
-            .args(&ssh_cli_args)
+            .args(&ssh_options)
+            .arg("--")
+            .arg(&destination)
             .arg("cat")
             .stdin(Stdio::piped())
             .stdout(Stdio::null())
@@ -189,7 +250,8 @@ impl SshRunner {
             .map_err(|e| format!("Failed to run ssh (is the OpenSSH client installed?): {}", e))?;
 
         let mut runner = SshRunner {
-            ssh_cli_args,
+            ssh_options,
+            destination,
             control_dir,
             master,
         };
@@ -206,15 +268,15 @@ impl SshRunner {
         loop {
             if let Ok(Some(status)) = self.master.try_wait() {
                 return Err(format!(
-                    "ssh {} exited before the connection was ready ({})",
-                    self.ssh_cli_args.join(" "),
-                    status
+                    "ssh could not connect to {} ({})",
+                    self.destination, status
                 ));
             }
             let check = Command::new("ssh")
                 .args(multiplex_args(&self.control_dir, true))
-                .args(["-O", "check"])
-                .args(&self.ssh_cli_args)
+                .args(&self.ssh_options)
+                .args(["-O", "check", "--"])
+                .arg(&self.destination)
                 .stdin(Stdio::null())
                 .stdout(Stdio::null())
                 .stderr(Stdio::null())
@@ -236,8 +298,9 @@ impl Drop for SshRunner {
         drop(self.master.stdin.take());
         let _ = Command::new("ssh")
             .args(multiplex_args(&self.control_dir, true))
-            .args(["-O", "exit"])
-            .args(&self.ssh_cli_args)
+            .args(&self.ssh_options)
+            .args(["-O", "exit", "--"])
+            .arg(&self.destination)
             .stdin(Stdio::null())
             .stdout(Stdio::null())
             .stderr(Stdio::null())
@@ -253,7 +316,9 @@ impl CommandRunner for SshRunner {
         let output = Command::new("ssh")
             .stdin(Stdio::null())
             .args(multiplex_args(&self.control_dir, true))
-            .args(&self.ssh_cli_args)
+            .args(&self.ssh_options)
+            .arg("--")
+            .arg(&self.destination)
             .arg(join_remote_command(program, args))
             .output()
             .map_err(|e| format!("Failed to run ssh: {}", e))?;
@@ -1339,6 +1404,91 @@ mod tests {
     #[test]
     fn test_connect_rejects_empty_args() {
         assert!(SshRunner::connect(Vec::new()).is_err());
+    }
+
+    // split_ssh_args
+
+    fn strings(args: &[&str]) -> Vec<String> {
+        args.iter().map(|s| s.to_string()).collect()
+    }
+
+    #[test]
+    fn test_split_ssh_args_destination_only() {
+        assert_eq!(
+            split_ssh_args(&strings(&["root@host"])),
+            Ok((Vec::new(), "root@host".to_string()))
+        );
+    }
+
+    #[test]
+    fn test_split_ssh_args_options_before_destination() {
+        assert_eq!(
+            split_ssh_args(&strings(&["-p", "2222", "-i", "key", "root@host"])),
+            Ok((strings(&["-p", "2222", "-i", "key"]), "root@host".to_string()))
+        );
+    }
+
+    #[test]
+    fn test_split_ssh_args_rejects_options_after_destination() {
+        // In plain ssh, trailing arguments are the remote command — which
+        // systemdmgr supplies itself; only one form is accepted.
+        let err = split_ssh_args(&strings(&["root@host", "-i", "key"])).unwrap_err();
+        assert!(err.contains("unexpected arguments after destination 'root@host'"));
+        assert!(err.contains("usage: --ssh [ssh-options] destination"));
+    }
+
+    #[test]
+    fn test_split_ssh_args_rejects_double_dash() {
+        let err = split_ssh_args(&strings(&["--", "root@host"])).unwrap_err();
+        assert!(err.contains("'--' is not supported"));
+        assert!(split_ssh_args(&strings(&["-i", "key", "--", "root@host"])).is_err());
+    }
+
+    #[test]
+    fn test_split_ssh_args_attached_option_value() {
+        // -p2222: the value is attached to the flag, no extra argument.
+        assert_eq!(
+            split_ssh_args(&strings(&["-p2222", "host"])),
+            Ok((strings(&["-p2222"]), "host".to_string()))
+        );
+    }
+
+    #[test]
+    fn test_split_ssh_args_flag_cluster() {
+        // -4A is two no-value flags; host is the destination.
+        assert_eq!(
+            split_ssh_args(&strings(&["-4A", "host"])),
+            Ok((strings(&["-4A"]), "host".to_string()))
+        );
+    }
+
+    #[test]
+    fn test_split_ssh_args_cluster_ending_in_value_flag() {
+        // -vp 2222: -v is a flag, -p consumes the next argument.
+        assert_eq!(
+            split_ssh_args(&strings(&["-vp", "2222", "host"])),
+            Ok((strings(&["-vp", "2222"]), "host".to_string()))
+        );
+    }
+
+    #[test]
+    fn test_split_ssh_args_missing_option_value() {
+        assert!(split_ssh_args(&strings(&["-i"])).is_err());
+    }
+
+    #[test]
+    fn test_split_ssh_args_no_destination() {
+        assert!(split_ssh_args(&strings(&["-p", "2222"])).is_err());
+        assert!(split_ssh_args(&[]).is_err());
+    }
+
+    #[test]
+    fn test_ssh_destination_helper() {
+        assert_eq!(
+            ssh_destination(&strings(&["-i", "key", "root@host"])),
+            Some("root@host".to_string())
+        );
+        assert_eq!(ssh_destination(&strings(&["-v"])), None);
     }
 
     // Phase 2 — UnitType::label
