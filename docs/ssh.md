@@ -8,49 +8,34 @@ systemdmgr can manage systemd units on a remote server over SSH.
 systemdmgr --ssh user@server
 ```
 
-The connection authenticates and enters the TUI. All `systemctl` and `journalctl` commands run transparently over the SSH session.
+The connection authenticates and enters the TUI. All `systemctl` and `journalctl` commands run transparently over SSH.
 The remote host must have systemd 246+ and `systemctl` on `PATH`; this is validated with `systemctl --version` after authentication.
 
 ## Connection
 
-systemdmgr uses the [ssh2](https://crates.io/crates/ssh2) crate (libssh2 bindings) for SSH connectivity and the [ssh2-config](https://crates.io/crates/ssh2-config) crate for parsing `~/.ssh/config`. There is no dependency on the system `ssh` binary.
+systemdmgr delegates all SSH connectivity to the system OpenSSH client (the `ssh` binary on `PATH`). It does not bundle an SSH library, which means everything your `ssh` command supports works unchanged: `~/.ssh/config` (including `Match`, `Include`, `ProxyJump`, `CanonicalizeHostname`), `ssh-agent` and agent forwarding, FIDO2/`sk-` keys, host certificates, `known_hosts` handling, and Kerberos/GSSAPI.
 
-- A single TCP connection is opened and reused for all commands
-- Keepalive packets are sent every 60 seconds (`ServerAliveInterval` equivalent)
-- The session is cleaned up automatically on exit (including panics)
+Connection lifecycle:
 
-## Host Resolution
+- On startup, systemdmgr opens an interactive SSH **ControlMaster** connection. Because this first connection runs on your real terminal, ssh itself handles host key verification and any authentication prompts (password, key passphrase, OTP/MFA).
+- Every subsequent command multiplexes over the master socket (`ControlPath` under a private, per-process directory in the system temp dir with `0700` permissions), so there is no per-command handshake.
+- Commands inside the TUI run with `BatchMode=yes`, so they fail fast instead of prompting if the master connection is ever lost. If the master dies and your setup authenticates non-interactively (agent or unencrypted key), each command still works by performing its own handshake.
+- Keepalives are sent every 60 seconds (`ServerAliveInterval=60`).
+- The master is not a detached daemon: it is a child process running `cat` on the remote host with its stdin tied to a pipe systemdmgr holds. If systemdmgr dies for any reason — including `SIGKILL` — the pipe closes, `cat` sees EOF, and the master stops itself within moments. On normal exit (including panics) the master is closed immediately (`ssh -O exit`) and the control directory removed.
 
-The `--ssh` argument accepts these forms:
+## Command-Line Arguments
 
-| Form | Example |
-|------|---------|
-| `host` | `systemdmgr --ssh myserver` |
-| `user@host` | `systemdmgr --ssh deploy@myserver` |
-| `user@host:port` | `systemdmgr --ssh deploy@myserver:2222` |
-
-Use `--ssh-identity-file` to specify one or more private key files from the CLI:
+Everything after `--ssh` is forwarded to the ssh client verbatim, using ssh's own `[options] destination` syntax — the same arguments you would give a plain `ssh` command:
 
 ```bash
-systemdmgr --ssh deploy@myserver --ssh-identity-file ~/.ssh/deploy_key
+systemdmgr --ssh myserver
+systemdmgr --ssh deploy@myserver
+systemdmgr --ssh -p 2222 -i ~/.ssh/deploy_key deploy@myserver
+systemdmgr --ssh -J bastion deploy@myserver
+systemdmgr --ssh -- deploy@myserver
 ```
 
-When this flag is present, the specified key files override `IdentityFile` entries from `~/.ssh/config` and are tried before SSH agent identities.
-Passphrase-protected private key files are not supported when loaded directly from disk. Add encrypted keys to `ssh-agent` instead.
-
-### `~/.ssh/config` Support
-
-systemdmgr parses `~/.ssh/config` using the [ssh2-config](https://crates.io/crates/ssh2-config) crate and applies the following directives:
-
-| Directive | Description |
-|-----------|-------------|
-| `Host` | Pattern matching with exact names and globs |
-| `HostName` | Resolved hostname to connect to |
-| `Port` | SSH port (overridden by `:port` in the CLI argument) |
-| `User` | Login username (overridden by `user@` in the CLI argument) |
-| `IdentityFile` | Path to private key file (`~` expansion supported) |
-
-Other directives recognized by `ssh2-config` (e.g., `Compression`, `ConnectTimeout`, `ProxyJump`) are parsed without error but not acted upon. Unrecognized and unsupported directives are silently ignored.
+The destination can be anything your SSH setup resolves: a hostname, an IP address, a `Host` alias from `~/.ssh/config`, or a `ssh://user@host:port` URI. Options resolve exactly as they would for a plain `ssh` invocation.
 
 Example `~/.ssh/config`:
 
@@ -60,29 +45,18 @@ Host prod
     User deploy
     Port 2222
     IdentityFile ~/.ssh/deploy_key
+    ProxyJump bastion
 ```
 
 ```bash
 systemdmgr --ssh prod
 ```
 
-CLI arguments (`user@`, `:port`) take precedence over config file values.
+The multiplexing options systemdmgr adds (`ControlPath`, `ControlMaster`, `ServerAliveInterval`, and `BatchMode` for in-TUI commands) are placed before your arguments, and ssh gives the first occurrence of an option precedence — so they cannot be accidentally overridden.
 
 ## Authentication
 
-Authentication is attempted in this order:
-
-1. **None** -- the initial auth-method discovery request can authenticate servers that explicitly allow `none`.
-2. **CLI key files** -- if `--ssh-identity-file` is set, those paths are tried before the agent.
-3. **SSH agent** (`ssh-agent`) -- all loaded identities are tried.
-4. **Config/default key files** -- if the agent fails and no CLI key file was specified, key files are tried:
-   - If `IdentityFile` is set in `~/.ssh/config`, those paths are used.
-   - Otherwise, the default keys are tried: `~/.ssh/id_ed25519`, `~/.ssh/id_rsa`, `~/.ssh/id_ecdsa`.
-5. **Hostbased** -- if the server offers hostbased authentication, readable local host keys under `/etc/ssh/ssh_host_*_key` are tried.
-6. **Keyboard-interactive** -- if the server requests interactive prompts, systemdmgr displays them before entering the TUI. This supports OTP, MFA, and PAM challenge flows, and honors whether each response should be echoed.
-7. **Password** -- if the server offers plain SSH password authentication, systemdmgr prompts up to three times with hidden input.
-
-Authentication prompts are shown before systemdmgr enters the TUI.
+Authentication is performed entirely by the OpenSSH client, following its normal method order and your client configuration (`PreferredAuthentications`, `IdentitiesOnly`, etc.). Passwords, key passphrases, and keyboard-interactive challenges such as OTP/MFA are prompted by ssh itself before systemdmgr enters the TUI. Passphrase-protected keys work, both via prompt and via `ssh-agent`.
 
 ## User Mode
 
@@ -105,31 +79,30 @@ loginctl enable-linger <username>
 ```
 systemdmgr (local)
     |
-    |-- ssh2::Session (TCP connection to remote)
+    |-- ssh (system OpenSSH client, ControlMaster connection)
     |     |
-    |     |-- channel.exec("systemctl --no-ask-password list-units ...")
-    |     |-- channel.exec("journalctl -n 1000 --output=json ...")
+    |     |-- ssh -o ControlPath=... -o BatchMode=yes host "systemctl --no-ask-password list-units ..."
+    |     |-- ssh -o ControlPath=... -o BatchMode=yes host "journalctl -n 1000 --output=json ..."
     |     |-- ...
     |
     |-- CommandRunner trait
           |-- LocalRunner  (std::process::Command, used without --ssh)
-          |-- SshRunner    (ssh2::Session, used with --ssh)
+          |-- SshRunner    (ssh subprocess per command, multiplexed over the master socket)
 ```
 
-All command execution goes through the `CommandRunner` trait. `LocalRunner` runs commands as local processes; `SshRunner` runs them over the SSH session. The rest of the application is unaware of which is in use.
+All command execution goes through the `CommandRunner` trait. `LocalRunner` runs commands as local processes; `SshRunner` runs each command as an `ssh` subprocess that reuses the master connection. The rest of the application is unaware of which is in use.
 
-Commands are serialized through a `Mutex<ssh2::Session>` since `ssh2::Session` is not `Sync`. This matches the application's usage pattern (one command at a time).
+An ssh exit status of 255 signals a transport or authentication failure and is reported as a connection error; any other exit status is the remote command's own.
 
 ## Shell Escaping
 
-When running commands over SSH, arguments are combined into a single command string for `channel.exec()`. Arguments containing spaces or special characters are POSIX shell-quoted (single-quote wrapping with `'\\''` escape for embedded single quotes).
+The remote command is passed to `ssh` as a single string that the remote shell evaluates. Arguments containing spaces or special characters are POSIX shell-quoted (single-quote wrapping with `'\''` escape for embedded single quotes).
 
 ## Troubleshooting
 
 | Problem | Solution |
 |---------|----------|
-| "SSH authentication failed: no supported authentication methods succeeded" | Ensure `ssh-agent` is running with keys loaded, key files exist at `~/.ssh/id_ed25519` (or similar), or the server offers keyboard-interactive/password authentication. Check `IdentityFile` in `~/.ssh/config`. |
-| Encrypted private key file fails | Add the key to `ssh-agent`; direct key-file authentication does not prompt for private key passphrases. |
-| "Failed to connect to host:22" | Verify the host is reachable and sshd is running. Check `HostName` and `Port` in `~/.ssh/config`. |
-| "SSH handshake failed" | The remote server may not support the key exchange algorithms available in libssh2. |
+| `Failed to run ssh (is the OpenSSH client installed?)` | Install the OpenSSH client (`openssh-client` on Debian/Ubuntu; preinstalled on macOS). |
+| Authentication or host key errors on connect | These come directly from ssh. Verify `ssh <same-destination>` works in a plain terminal first — if it does, systemdmgr will too. |
+| `SSH error: ...` while inside the TUI | The master connection dropped and could not be re-established non-interactively (`BatchMode=yes`). Quit and reconnect. |
 | User units not visible | Run `loginctl enable-linger <username>` on the remote server. |

@@ -24,8 +24,7 @@ const LIVE_TAIL_REFRESH_INTERVAL: Duration = Duration::from_millis(500);
 
 fn main() -> io::Result<()> {
     let args: Vec<String> = std::env::args().collect();
-    let mut host: Option<String> = None;
-    let mut identity_files: Vec<std::path::PathBuf> = Vec::new();
+    let mut ssh_args: Option<Vec<String>> = None;
     let mut i = 1;
     while i < args.len() {
         match args[i].as_str() {
@@ -33,42 +32,33 @@ fn main() -> io::Result<()> {
                 println!("systemdmgr {}", env!("CARGO_PKG_VERSION"));
                 return Ok(());
             }
+            // Everything after --ssh is forwarded to the ssh client verbatim,
+            // using ssh's own `[options] destination` syntax.
             "--ssh" => {
-                i += 1;
-                if i >= args.len() {
-                    eprintln!("--ssh requires a value (e.g., --ssh user@server)");
+                let rest = &args[i + 1..];
+                if rest.is_empty() {
+                    eprintln!("--ssh requires ssh arguments (e.g., --ssh user@server or --ssh -p 2222 -i key user@server)");
                     std::process::exit(1);
                 }
-                host = Some(args[i].clone());
-            }
-            "--ssh-identity-file" => {
-                i += 1;
-                if i >= args.len() {
-                    eprintln!("--ssh-identity-file requires a path");
-                    std::process::exit(1);
-                }
-                identity_files.push(std::path::PathBuf::from(&args[i]));
+                ssh_args = Some(rest.to_vec());
+                i = args.len();
             }
             arg => {
                 eprintln!("Unknown argument: {arg}");
-                eprintln!("Usage: systemdmgr [--ssh user@server] [--ssh-identity-file path] [version]");
+                eprintln!("Usage: systemdmgr [version] [--ssh [ssh-options] destination]");
                 std::process::exit(1);
             }
         }
         i += 1;
     }
 
-    if host.is_none() && !identity_files.is_empty() {
-        eprintln!("--ssh-identity-file requires --ssh");
-        std::process::exit(1);
-    }
-
-    let (runner, host_label): (Arc<dyn CommandRunner>, Option<String>) = if let Some(ref host) = host {
-        eprintln!("Connecting to {host}...");
-        match SshRunner::connect(host, identity_files) {
-            Ok(r) => {
-                (Arc::new(r), Some(host.clone()))
-            }
+    let (runner, host_label): (Arc<dyn CommandRunner>, Option<String>) = if let Some(ssh_args) = ssh_args {
+        // The destination is the last argument in ssh's `[options] destination`
+        // syntax; used only for display.
+        let label = ssh_args.last().cloned().unwrap_or_default();
+        eprintln!("Connecting to {label}...");
+        match SshRunner::connect(ssh_args) {
+            Ok(r) => (Arc::new(r), Some(label)),
             Err(e) => {
                 eprintln!("SSH connection failed: {e}");
                 std::process::exit(1);
@@ -92,7 +82,7 @@ fn main() -> io::Result<()> {
             } else {
                 eprintln!("Error: systemctl is not available on this machine.");
                 eprintln!("systemdmgr requires Linux with systemd. It cannot run natively on macOS or other non-systemd systems.");
-                eprintln!("To manage services on a remote Linux host, use: systemdmgr <ssh-host>");
+                eprintln!("To manage services on a remote Linux host, use: systemdmgr --ssh <destination>");
             }
             std::process::exit(1);
         }
