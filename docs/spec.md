@@ -32,7 +32,7 @@ src/
 - Remote target must have systemd 246+ with `systemctl` on `PATH`
 - Both system and user (`--user`) mode supported over SSH
 - Header displays remote host (e.g., `"SystemD Services [System] on user@server"`)
-- Master connection closed (`ssh -O exit`) via `Drop` on normal exit
+- The master is a supervised child process whose lifetime is tied to systemdmgr via a stdin watchdog pipe — it stops itself even if systemdmgr is `SIGKILL`ed; on normal exit it is closed via `Drop` (`ssh -O exit`)
 - See [ssh.md](ssh.md) for full details
 
 ## UI Layout

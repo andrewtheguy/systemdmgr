@@ -80,9 +80,15 @@ fn parse_systemd_version(output: &str) -> Option<u32> {
 /// established interactively on connect (so ssh can prompt for passwords, key
 /// passphrases, and host key verification on the real terminal) and every
 /// subsequent command multiplexes over that master socket in batch mode.
+///
+/// The master is kept as a direct child process running `cat` on the remote
+/// host, with its stdin tied to a pipe this process holds. If this process
+/// dies without running `Drop` (SIGKILL, crash), the pipe closes, `cat` sees
+/// EOF, and the master shuts itself down — no orphaned ssh process.
 pub struct SshRunner {
     ssh_cli_args: Vec<String>,
     control_dir: std::path::PathBuf,
+    master: std::process::Child,
 }
 
 fn shell_quote(arg: &str) -> String {
@@ -114,6 +120,30 @@ fn create_control_dir() -> Result<std::path::PathBuf, String> {
     Ok(dir)
 }
 
+/// Multiplexing options prepended to every ssh invocation. `batch_mode`
+/// disables prompts and log noise for command execution inside the TUI; the
+/// initial master connection runs without it so ssh can interact with the
+/// terminal. These come before the user's arguments, and ssh gives the first
+/// occurrence of an option precedence, so they cannot be accidentally
+/// overridden.
+fn multiplex_args(control_dir: &std::path::Path, batch_mode: bool) -> Vec<String> {
+    let mut args = vec![
+        "-o".to_string(),
+        format!("ControlPath={}/%C", control_dir.display()),
+        "-o".to_string(),
+        "ControlMaster=auto".to_string(),
+        "-o".to_string(),
+        "ServerAliveInterval=60".to_string(),
+    ];
+    if batch_mode {
+        args.push("-o".to_string());
+        args.push("BatchMode=yes".to_string());
+        args.push("-o".to_string());
+        args.push("LogLevel=ERROR".to_string());
+    }
+    args
+}
+
 impl SshRunner {
     /// `ssh_cli_args` uses ssh's own syntax: `[options] destination`,
     /// e.g. `["deploy@myserver"]` or `["-p", "2222", "-i", "key", "myserver"]`.
@@ -121,65 +151,75 @@ impl SshRunner {
         if ssh_cli_args.is_empty() {
             return Err("no SSH destination given".to_string());
         }
-        let runner = SshRunner {
+        let control_dir = create_control_dir()?;
+
+        // Remote `cat` blocks on our pipe forever; the master stays up
+        // exactly as long as this process is alive.
+        let master = Command::new("ssh")
+            .args(multiplex_args(&control_dir, false))
+            .args(&ssh_cli_args)
+            .arg("cat")
+            .stdin(Stdio::piped())
+            .stdout(Stdio::null())
+            .spawn()
+            .map_err(|e| format!("Failed to run ssh (is the OpenSSH client installed?): {}", e))?;
+
+        let mut runner = SshRunner {
             ssh_cli_args,
-            control_dir: create_control_dir()?,
+            control_dir,
+            master,
         };
-        runner.open_master()?;
+        // On failure this drops `runner`, which tears down the master and
+        // removes the control directory.
+        runner.wait_until_ready()?;
         Ok(runner)
     }
 
-    /// Multiplexing options prepended to every ssh invocation. `batch_mode`
-    /// disables prompts and log noise for command execution inside the TUI;
-    /// the initial master connection runs without it so ssh can interact with
-    /// the terminal. These come before the user's arguments, and ssh gives
-    /// the first occurrence of an option precedence, so they cannot be
-    /// accidentally overridden.
-    fn multiplex_args(&self, batch_mode: bool) -> Vec<String> {
-        let mut args = vec![
-            "-o".to_string(),
-            format!("ControlPath={}/%C", self.control_dir.display()),
-            "-o".to_string(),
-            "ControlMaster=auto".to_string(),
-            "-o".to_string(),
-            "ControlPersist=yes".to_string(),
-            "-o".to_string(),
-            "ServerAliveInterval=60".to_string(),
-        ];
-        if batch_mode {
-            args.push("-o".to_string());
-            args.push("BatchMode=yes".to_string());
-            args.push("-o".to_string());
-            args.push("LogLevel=ERROR".to_string());
-        }
-        args
-    }
-
-    fn open_master(&self) -> Result<(), String> {
-        let status = Command::new("ssh")
-            .args(self.multiplex_args(false))
-            .args(&self.ssh_cli_args)
-            .arg("true")
-            .status()
-            .map_err(|e| format!("Failed to run ssh (is the OpenSSH client installed?): {}", e))?;
-        if status.success() {
-            Ok(())
-        } else {
-            Err(format!("ssh {} exited unsuccessfully", self.ssh_cli_args.join(" ")))
+    /// Waits for the master to finish authenticating and publish its control
+    /// socket. Authentication may block indefinitely on user prompts, so the
+    /// only exit conditions are the socket answering or the master dying.
+    fn wait_until_ready(&mut self) -> Result<(), String> {
+        loop {
+            if let Ok(Some(status)) = self.master.try_wait() {
+                return Err(format!(
+                    "ssh {} exited before the connection was ready ({})",
+                    self.ssh_cli_args.join(" "),
+                    status
+                ));
+            }
+            let check = Command::new("ssh")
+                .args(multiplex_args(&self.control_dir, true))
+                .args(["-O", "check"])
+                .args(&self.ssh_cli_args)
+                .stdin(Stdio::null())
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .status();
+            if let Ok(status) = check
+                && status.success()
+            {
+                return Ok(());
+            }
+            std::thread::sleep(std::time::Duration::from_millis(150));
         }
     }
 }
 
 impl Drop for SshRunner {
     fn drop(&mut self) {
+        // Closing the watchdog pipe alone would stop the master; the explicit
+        // -O exit and kill just make teardown immediate and reap the child.
+        drop(self.master.stdin.take());
         let _ = Command::new("ssh")
-            .args(self.multiplex_args(true))
+            .args(multiplex_args(&self.control_dir, true))
             .args(["-O", "exit"])
             .args(&self.ssh_cli_args)
             .stdin(Stdio::null())
             .stdout(Stdio::null())
             .stderr(Stdio::null())
             .status();
+        let _ = self.master.kill();
+        let _ = self.master.wait();
         let _ = std::fs::remove_dir_all(&self.control_dir);
     }
 }
@@ -188,7 +228,7 @@ impl CommandRunner for SshRunner {
     fn run(&self, program: &str, args: &[&str]) -> Result<CommandOutput, String> {
         let output = Command::new("ssh")
             .stdin(Stdio::null())
-            .args(self.multiplex_args(true))
+            .args(multiplex_args(&self.control_dir, true))
             .args(&self.ssh_cli_args)
             .arg(join_remote_command(program, args))
             .output()
@@ -1061,31 +1101,22 @@ mod tests {
 
     // SshRunner argument construction
 
-    fn make_ssh_runner() -> SshRunner {
-        SshRunner {
-            ssh_cli_args: vec!["-p".into(), "2222".into(), "deploy@myserver".into()],
-            control_dir: std::path::PathBuf::from("/nonexistent/ctl"),
-        }
-    }
-
     #[test]
     fn test_multiplex_args_batch_mode() {
-        let runner = make_ssh_runner();
-        let args = runner.multiplex_args(true);
+        let args = multiplex_args(std::path::Path::new("/nonexistent/ctl"), true);
         assert!(args.contains(&"ControlPath=/nonexistent/ctl/%C".to_string()));
         assert!(args.contains(&"ControlMaster=auto".to_string()));
-        assert!(args.contains(&"ControlPersist=yes".to_string()));
         assert!(args.contains(&"BatchMode=yes".to_string()));
-        std::mem::forget(runner); // avoid Drop invoking ssh -O exit in tests
+        // The master's lifetime is tied to the watchdog child, never to a
+        // detached daemon that could outlive this process.
+        assert!(!args.iter().any(|a| a.starts_with("ControlPersist")));
     }
 
     #[test]
     fn test_multiplex_args_interactive_has_no_batch_mode() {
-        let runner = make_ssh_runner();
-        let args = runner.multiplex_args(false);
+        let args = multiplex_args(std::path::Path::new("/nonexistent/ctl"), false);
         assert!(!args.contains(&"BatchMode=yes".to_string()));
         assert!(!args.contains(&"LogLevel=ERROR".to_string()));
-        std::mem::forget(runner);
     }
 
     #[test]

@@ -17,11 +17,11 @@ systemdmgr delegates all SSH connectivity to the system OpenSSH client (the `ssh
 
 Connection lifecycle:
 
-- On startup, systemdmgr opens an interactive SSH **ControlMaster** connection (`ControlMaster=auto`, `ControlPersist=yes`). Because this first connection runs on your real terminal, ssh itself handles host key verification and any authentication prompts (password, key passphrase, OTP/MFA).
+- On startup, systemdmgr opens an interactive SSH **ControlMaster** connection. Because this first connection runs on your real terminal, ssh itself handles host key verification and any authentication prompts (password, key passphrase, OTP/MFA).
 - Every subsequent command multiplexes over the master socket (`ControlPath` under a private, per-process directory in the system temp dir with `0700` permissions), so there is no per-command handshake.
-- Commands inside the TUI run with `BatchMode=yes`, so they fail fast instead of prompting if the master connection is ever lost. If the master dies and your setup authenticates non-interactively (agent or unencrypted key), the next command transparently re-establishes it.
+- Commands inside the TUI run with `BatchMode=yes`, so they fail fast instead of prompting if the master connection is ever lost. If the master dies and your setup authenticates non-interactively (agent or unencrypted key), each command still works by performing its own handshake.
 - Keepalives are sent every 60 seconds (`ServerAliveInterval=60`).
-- On exit the master connection is closed (`ssh -O exit`) and the control directory is removed, including on panics. If the process is killed outright (e.g. `SIGKILL`), the background master may linger until the socket is closed manually.
+- The master is not a detached daemon: it is a child process running `cat` on the remote host with its stdin tied to a pipe systemdmgr holds. If systemdmgr dies for any reason — including `SIGKILL` — the pipe closes, `cat` sees EOF, and the master stops itself within moments. On normal exit (including panics) the master is closed immediately (`ssh -O exit`) and the control directory removed.
 
 ## Command-Line Arguments
 
@@ -52,7 +52,7 @@ Host prod
 systemdmgr --ssh prod
 ```
 
-The multiplexing options systemdmgr adds (`ControlPath`, `ControlMaster`, `ControlPersist`, `ServerAliveInterval`, and `BatchMode` for in-TUI commands) are placed before your arguments, and ssh gives the first occurrence of an option precedence — so they cannot be accidentally overridden.
+The multiplexing options systemdmgr adds (`ControlPath`, `ControlMaster`, `ServerAliveInterval`, and `BatchMode` for in-TUI commands) are placed before your arguments, and ssh gives the first occurrence of an option precedence — so they cannot be accidentally overridden.
 
 ## Authentication
 
@@ -81,8 +81,8 @@ systemdmgr (local)
     |
     |-- ssh (system OpenSSH client, ControlMaster connection)
     |     |
-    |     |-- ssh -o ControlPath=... -o BatchMode=yes -- host "systemctl --no-ask-password list-units ..."
-    |     |-- ssh -o ControlPath=... -o BatchMode=yes -- host "journalctl -n 1000 --output=json ..."
+    |     |-- ssh -o ControlPath=... -o BatchMode=yes host "systemctl --no-ask-password list-units ..."
+    |     |-- ssh -o ControlPath=... -o BatchMode=yes host "journalctl -n 1000 --output=json ..."
     |     |-- ...
     |
     |-- CommandRunner trait
@@ -105,5 +105,4 @@ The remote command is passed to `ssh` as a single string that the remote shell e
 | `Failed to run ssh (is the OpenSSH client installed?)` | Install the OpenSSH client (`openssh-client` on Debian/Ubuntu; preinstalled on macOS). |
 | Authentication or host key errors on connect | These come directly from ssh. Verify `ssh <same-destination>` works in a plain terminal first — if it does, systemdmgr will too. |
 | `SSH error: ...` while inside the TUI | The master connection dropped and could not be re-established non-interactively (`BatchMode=yes`). Quit and reconnect. |
-| Commands hang or a stale connection lingers after a crash | Close leftover masters with `ssh -O exit -o ControlPath=<socket> <destination>`; sockets live under `systemdmgr-ssh-<pid>` in the system temp dir. |
 | User units not visible | Run `loginctl enable-linger <username>` on the remote server. |
