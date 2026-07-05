@@ -25,11 +25,10 @@ src/
 
 ### Remote Management (SSH)
 
-- Enabled via `--ssh user@server` CLI flag
+- Enabled via the `--ssh` CLI flag; everything after it is forwarded to ssh verbatim (`--ssh [ssh-options] destination`)
 - Delegates connectivity to the system OpenSSH client (`ssh` on `PATH`) — no bundled SSH library
 - An interactive ControlMaster connection is opened on startup; each command runs as an `ssh` subprocess multiplexed over the master socket (`BatchMode=yes`)
 - Full `~/.ssh/config` semantics, authentication methods (agent, passphrase-protected keys, password, OTP/MFA), host key handling, and jump hosts — all handled by ssh itself
-- Supports `--ssh-identity-file`, forwarded to ssh as `-i`
 - Remote target must have systemd 246+ with `systemctl` on `PATH`
 - Both system and user (`--user`) mode supported over SSH
 - Header displays remote host (e.g., `"SystemD Services [System] on user@server"`)

@@ -23,17 +23,19 @@ Connection lifecycle:
 - Keepalives are sent every 60 seconds (`ServerAliveInterval=60`).
 - On exit the master connection is closed (`ssh -O exit`) and the control directory is removed, including on panics. If the process is killed outright (e.g. `SIGKILL`), the background master may linger until the socket is closed manually.
 
-## Host Resolution
+## Command-Line Arguments
 
-The `--ssh` argument accepts these forms:
+Everything after `--ssh` is forwarded to the ssh client verbatim, using ssh's own `[options] destination` syntax — the same arguments you would give a plain `ssh` command:
 
-| Form | Example |
-|------|---------|
-| `host` | `systemdmgr --ssh myserver` |
-| `user@host` | `systemdmgr --ssh deploy@myserver` |
-| `user@host:port` | `systemdmgr --ssh deploy@myserver:2222` |
+```bash
+systemdmgr --ssh myserver
+systemdmgr --ssh deploy@myserver
+systemdmgr --ssh -p 2222 -i ~/.ssh/deploy_key deploy@myserver
+systemdmgr --ssh -J bastion deploy@myserver
+systemdmgr --ssh -- deploy@myserver
+```
 
-The destination is passed to `ssh` as-is (a `:port` suffix becomes `-p <port>`), so `host` can be anything your SSH setup resolves: a real hostname, an IP address, or a `Host` alias from `~/.ssh/config`. User, port, identity files, jump hosts, and every other setting resolve exactly as they would for a plain `ssh` invocation; `user@` and `:port` given on the command line take precedence over config values, as usual for ssh.
+The destination can be anything your SSH setup resolves: a hostname, an IP address, a `Host` alias from `~/.ssh/config`, or a `ssh://user@host:port` URI. Options resolve exactly as they would for a plain `ssh` invocation.
 
 Example `~/.ssh/config`:
 
@@ -50,11 +52,7 @@ Host prod
 systemdmgr --ssh prod
 ```
 
-Use `--ssh-identity-file` to pass one or more private key files from the CLI (forwarded to ssh as `-i`, which prioritizes them over default identities):
-
-```bash
-systemdmgr --ssh deploy@myserver --ssh-identity-file ~/.ssh/deploy_key
-```
+The multiplexing options systemdmgr adds (`ControlPath`, `ControlMaster`, `ControlPersist`, `ServerAliveInterval`, and `BatchMode` for in-TUI commands) are placed before your arguments, and ssh gives the first occurrence of an option precedence — so they cannot be accidentally overridden.
 
 ## Authentication
 

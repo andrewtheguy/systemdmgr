@@ -75,14 +75,13 @@ fn parse_systemd_version(output: &str) -> Option<u32> {
 
 /// Runs commands on a remote host by invoking the system OpenSSH client.
 ///
-/// A ControlMaster connection is established interactively on connect (so ssh
-/// can prompt for passwords, key passphrases, and host key verification on the
-/// real terminal) and every subsequent command multiplexes over that master
-/// socket in batch mode.
+/// The CLI arguments after `--ssh` are forwarded to ssh verbatim, using ssh's
+/// own `[options] destination` syntax. A ControlMaster connection is
+/// established interactively on connect (so ssh can prompt for passwords, key
+/// passphrases, and host key verification on the real terminal) and every
+/// subsequent command multiplexes over that master socket in batch mode.
 pub struct SshRunner {
-    destination: String,
-    port: Option<u16>,
-    identity_files: Vec<std::path::PathBuf>,
+    ssh_cli_args: Vec<String>,
     control_dir: std::path::PathBuf,
 }
 
@@ -94,39 +93,6 @@ fn shell_quote(arg: &str) -> String {
         return arg.to_string();
     }
     format!("'{}'", arg.replace('\'', "'\\''"))
-}
-
-fn expand_identity_path(path: std::path::PathBuf) -> std::path::PathBuf {
-    if let Some(rest) = path.to_str().and_then(|value| value.strip_prefix("~/"))
-        && let Ok(home) = std::env::var("HOME") {
-        return std::path::PathBuf::from(format!("{}/{}", home, rest));
-    }
-    path
-}
-
-/// Splits a `[user@]host[:port]` CLI destination into the ssh destination
-/// string and an optional port.
-fn parse_ssh_destination(host: &str) -> Result<(String, Option<u16>), String> {
-    let (user, rest) = match host.rsplit_once('@') {
-        Some((user, rest)) => (Some(user), rest),
-        None => (None, host),
-    };
-
-    let (host_part, port) = if let Some((h, p)) = rest.rsplit_once(':') {
-        (h, Some(p.parse::<u16>().map_err(|_| format!("Invalid port: {}", p))?))
-    } else {
-        (rest, None)
-    };
-
-    if host_part.is_empty() {
-        return Err(format!("Invalid SSH destination: {}", host));
-    }
-
-    let destination = match user {
-        Some(user) => format!("{}@{}", user, host_part),
-        None => host_part.to_string(),
-    };
-    Ok((destination, port))
 }
 
 fn join_remote_command(program: &str, args: &[&str]) -> String {
@@ -149,22 +115,27 @@ fn create_control_dir() -> Result<std::path::PathBuf, String> {
 }
 
 impl SshRunner {
-    pub fn connect(host: &str, identity_files: Vec<std::path::PathBuf>) -> Result<Self, String> {
-        let (destination, port) = parse_ssh_destination(host)?;
+    /// `ssh_cli_args` uses ssh's own syntax: `[options] destination`,
+    /// e.g. `["deploy@myserver"]` or `["-p", "2222", "-i", "key", "myserver"]`.
+    pub fn connect(ssh_cli_args: Vec<String>) -> Result<Self, String> {
+        if ssh_cli_args.is_empty() {
+            return Err("no SSH destination given".to_string());
+        }
         let runner = SshRunner {
-            destination,
-            port,
-            identity_files: identity_files.into_iter().map(expand_identity_path).collect(),
+            ssh_cli_args,
             control_dir: create_control_dir()?,
         };
         runner.open_master()?;
         Ok(runner)
     }
 
-    /// Common ssh CLI arguments. `batch_mode` disables prompts and log noise
-    /// for command execution inside the TUI; the initial master connection
-    /// runs without it so ssh can interact with the terminal.
-    fn ssh_args(&self, batch_mode: bool) -> Vec<String> {
+    /// Multiplexing options prepended to every ssh invocation. `batch_mode`
+    /// disables prompts and log noise for command execution inside the TUI;
+    /// the initial master connection runs without it so ssh can interact with
+    /// the terminal. These come before the user's arguments, and ssh gives
+    /// the first occurrence of an option precedence, so they cannot be
+    /// accidentally overridden.
+    fn multiplex_args(&self, batch_mode: bool) -> Vec<String> {
         let mut args = vec![
             "-o".to_string(),
             format!("ControlPath={}/%C", self.control_dir.display()),
@@ -181,29 +152,20 @@ impl SshRunner {
             args.push("-o".to_string());
             args.push("LogLevel=ERROR".to_string());
         }
-        if let Some(port) = self.port {
-            args.push("-p".to_string());
-            args.push(port.to_string());
-        }
-        for path in &self.identity_files {
-            args.push("-i".to_string());
-            args.push(path.display().to_string());
-        }
         args
     }
 
     fn open_master(&self) -> Result<(), String> {
         let status = Command::new("ssh")
-            .args(self.ssh_args(false))
-            .arg("--")
-            .arg(&self.destination)
+            .args(self.multiplex_args(false))
+            .args(&self.ssh_cli_args)
             .arg("true")
             .status()
             .map_err(|e| format!("Failed to run ssh (is the OpenSSH client installed?): {}", e))?;
         if status.success() {
             Ok(())
         } else {
-            Err(format!("ssh could not connect to {}", self.destination))
+            Err(format!("ssh {} exited unsuccessfully", self.ssh_cli_args.join(" ")))
         }
     }
 }
@@ -211,9 +173,9 @@ impl SshRunner {
 impl Drop for SshRunner {
     fn drop(&mut self) {
         let _ = Command::new("ssh")
-            .args(self.ssh_args(true))
-            .args(["-O", "exit", "--"])
-            .arg(&self.destination)
+            .args(self.multiplex_args(true))
+            .args(["-O", "exit"])
+            .args(&self.ssh_cli_args)
             .stdin(Stdio::null())
             .stdout(Stdio::null())
             .stderr(Stdio::null())
@@ -226,9 +188,8 @@ impl CommandRunner for SshRunner {
     fn run(&self, program: &str, args: &[&str]) -> Result<CommandOutput, String> {
         let output = Command::new("ssh")
             .stdin(Stdio::null())
-            .args(self.ssh_args(true))
-            .arg("--")
-            .arg(&self.destination)
+            .args(self.multiplex_args(true))
+            .args(&self.ssh_cli_args)
             .arg(join_remote_command(program, args))
             .output()
             .map_err(|e| format!("Failed to run ssh: {}", e))?;
@@ -1067,51 +1028,6 @@ mod tests {
         assert_eq!(parse_systemd_version("not systemd\n"), None);
     }
 
-    // SSH destination parsing
-
-    #[test]
-    fn test_parse_ssh_destination_host_only() {
-        assert_eq!(
-            parse_ssh_destination("myserver"),
-            Ok(("myserver".to_string(), None))
-        );
-    }
-
-    #[test]
-    fn test_parse_ssh_destination_user_host() {
-        assert_eq!(
-            parse_ssh_destination("deploy@myserver"),
-            Ok(("deploy@myserver".to_string(), None))
-        );
-    }
-
-    #[test]
-    fn test_parse_ssh_destination_user_host_port() {
-        assert_eq!(
-            parse_ssh_destination("deploy@myserver:2222"),
-            Ok(("deploy@myserver".to_string(), Some(2222)))
-        );
-    }
-
-    #[test]
-    fn test_parse_ssh_destination_host_port() {
-        assert_eq!(
-            parse_ssh_destination("myserver:2222"),
-            Ok(("myserver".to_string(), Some(2222)))
-        );
-    }
-
-    #[test]
-    fn test_parse_ssh_destination_invalid_port() {
-        assert!(parse_ssh_destination("myserver:notaport").is_err());
-    }
-
-    #[test]
-    fn test_parse_ssh_destination_empty_host() {
-        assert!(parse_ssh_destination("deploy@:2222").is_err());
-        assert!(parse_ssh_destination("").is_err());
-    }
-
     // shell_quote / join_remote_command
 
     #[test]
@@ -1147,35 +1063,34 @@ mod tests {
 
     fn make_ssh_runner() -> SshRunner {
         SshRunner {
-            destination: "deploy@myserver".into(),
-            port: Some(2222),
-            identity_files: vec![std::path::PathBuf::from("/keys/deploy_key")],
+            ssh_cli_args: vec!["-p".into(), "2222".into(), "deploy@myserver".into()],
             control_dir: std::path::PathBuf::from("/nonexistent/ctl"),
         }
     }
 
     #[test]
-    fn test_ssh_args_batch_mode() {
+    fn test_multiplex_args_batch_mode() {
         let runner = make_ssh_runner();
-        let args = runner.ssh_args(true);
+        let args = runner.multiplex_args(true);
         assert!(args.contains(&"ControlPath=/nonexistent/ctl/%C".to_string()));
         assert!(args.contains(&"ControlMaster=auto".to_string()));
         assert!(args.contains(&"ControlPersist=yes".to_string()));
         assert!(args.contains(&"BatchMode=yes".to_string()));
-        let port_pos = args.iter().position(|a| a == "-p").unwrap();
-        assert_eq!(args[port_pos + 1], "2222");
-        let key_pos = args.iter().position(|a| a == "-i").unwrap();
-        assert_eq!(args[key_pos + 1], "/keys/deploy_key");
         std::mem::forget(runner); // avoid Drop invoking ssh -O exit in tests
     }
 
     #[test]
-    fn test_ssh_args_interactive_has_no_batch_mode() {
+    fn test_multiplex_args_interactive_has_no_batch_mode() {
         let runner = make_ssh_runner();
-        let args = runner.ssh_args(false);
+        let args = runner.multiplex_args(false);
         assert!(!args.contains(&"BatchMode=yes".to_string()));
         assert!(!args.contains(&"LogLevel=ERROR".to_string()));
         std::mem::forget(runner);
+    }
+
+    #[test]
+    fn test_connect_rejects_empty_args() {
+        assert!(SshRunner::connect(Vec::new()).is_err());
     }
 
     // Phase 2 — UnitType::label

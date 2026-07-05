@@ -66,9 +66,12 @@ systemdmgr
 
 Manage systemd units on a remote server over SSH:
 
+Everything after `--ssh` is passed to the ssh client verbatim, using ssh's own `[options] destination` syntax:
+
 ```bash
 systemdmgr --ssh user@server
-systemdmgr --ssh user@server --ssh-identity-file ~/.ssh/deploy_key
+systemdmgr --ssh -p 2222 -i ~/.ssh/deploy_key user@server
+systemdmgr --ssh -J bastion user@server
 ```
 
 Connectivity is delegated to the system OpenSSH client: authentication (agent, keys, password, OTP/MFA), host key verification, `~/.ssh/config` (including `ProxyJump` and `Match`), and passphrase prompts all work exactly as they do for plain `ssh`. A single multiplexed connection (ControlMaster) is reused for all commands. `--user` mode works over SSH (requires `loginctl enable-linger` on the remote).
