@@ -906,27 +906,30 @@ fn render_log_entry<'a>(entry: &LogEntry, line_idx: usize, app: &App) -> Line<'a
         base_style = base_style.add_modifier(Modifier::BOLD);
     }
 
-    let message_spans = highlight_search_in_message(&entry.message, line_idx, app, base_style);
+    let message_spans = styled_message_spans(entry, line_idx, app, base_style);
     spans.extend(message_spans);
 
     Line::from(spans)
 }
 
-fn highlight_search_in_message<'a>(
-    message: &str,
+/// Builds the message spans for a log entry, overlaying (in order of
+/// precedence) search-match highlights, styles parsed from ANSI escape
+/// sequences in the message, and the severity base style.
+fn styled_message_spans<'a>(
+    entry: &LogEntry,
     line_idx: usize,
     app: &App,
     base_style: Style,
 ) -> Vec<Span<'a>> {
-    if app.log_search_query.is_empty() {
-        return vec![Span::styled(message.to_string(), base_style)];
-    }
+    let message = &entry.message;
+    let match_ranges = if app.log_search_query.is_empty() {
+        Vec::new()
+    } else {
+        search_match_ranges(message, &app.log_search_query.to_lowercase())
+    };
 
-    let query_lower = app.log_search_query.to_lowercase();
-    let msg_lower = message.to_lowercase();
-
-    if !msg_lower.contains(&query_lower) {
-        return vec![Span::styled(message.to_string(), base_style)];
+    if match_ranges.is_empty() && entry.message_styles.is_empty() {
+        return vec![Span::styled(message.clone(), base_style)];
     }
 
     let is_current_match = app.log_search_match_index.is_some_and(|mi| {
@@ -941,7 +944,35 @@ fn highlight_search_in_message<'a>(
         Style::default().bg(Color::DarkGray).fg(Color::Yellow)
     };
 
-    find_and_highlight_matches(message, &query_lower, base_style, highlight_style)
+    // Walk the union of ANSI-style and search-match boundaries. Both kinds of
+    // range fall on char boundaries, so every window is safe to slice.
+    let mut bounds = vec![0, message.len()];
+    for (range, _) in &entry.message_styles {
+        bounds.push(range.start);
+        bounds.push(range.end);
+    }
+    for &(start, end) in &match_ranges {
+        bounds.push(start);
+        bounds.push(end);
+    }
+    bounds.sort_unstable();
+    bounds.dedup();
+
+    let mut spans = Vec::new();
+    for pair in bounds.windows(2) {
+        let (a, b) = (pair[0], pair[1]);
+        let style = if match_ranges.iter().any(|&(s, e)| s <= a && b <= e) {
+            highlight_style
+        } else {
+            entry
+                .message_styles
+                .iter()
+                .find(|(range, _)| range.start <= a && b <= range.end)
+                .map_or(base_style, |(_, ansi)| base_style.patch(*ansi))
+        };
+        spans.push(Span::styled(message[a..b].to_string(), style));
+    }
+    spans
 }
 
 fn render_help(frame: &mut Frame, app: &mut App) {
@@ -1405,14 +1436,10 @@ fn highlight_search_in_span<'a>(
 /// of each char boundary, so that byte positions found in the lowered string
 /// can be mapped back to the correct slice in the original text — even when
 /// `to_lowercase()` changes the byte length of a character.
-fn find_and_highlight_matches<'a>(
-    text: &str,
-    query_lower: &str,
-    base_style: Style,
-    highlight_style: Style,
-) -> Vec<Span<'a>> {
+/// Byte ranges over `text` of case-insensitive matches of `query_lower`.
+fn search_match_ranges(text: &str, query_lower: &str) -> Vec<(usize, usize)> {
     if query_lower.is_empty() {
-        return vec![Span::styled(text.to_string(), base_style)];
+        return Vec::new();
     }
 
     // Build the lowered string and a mapping from lowered byte offset → original byte offset.
@@ -1433,41 +1460,40 @@ fn find_and_highlight_matches<'a>(
     // Sentinel: map the end-of-lowered-string position to end-of-original-string
     lower_to_orig.push(text.len());
 
+    let mut ranges = Vec::new();
+    let mut lower_pos = 0;
+    while let Some(found) = lowered[lower_pos..].find(query_lower) {
+        let lower_start = lower_pos + found;
+        let lower_end = lower_start + query_lower.len();
+        ranges.push((lower_to_orig[lower_start], lower_to_orig[lower_end]));
+        lower_pos = lower_end;
+    }
+    ranges
+}
+
+fn find_and_highlight_matches<'a>(
+    text: &str,
+    query_lower: &str,
+    base_style: Style,
+    highlight_style: Style,
+) -> Vec<Span<'a>> {
+    let ranges = search_match_ranges(text, query_lower);
+    if ranges.is_empty() {
+        return vec![Span::styled(text.to_string(), base_style)];
+    }
+
     let mut spans = Vec::new();
-    let mut orig_pos = 0; // current position in the original text (byte offset)
-    let mut lower_pos = 0; // current position in the lowered text (byte offset)
-
-    while lower_pos < lowered.len() {
-        if let Some(match_start_in_slice) = lowered[lower_pos..].find(query_lower) {
-            let lower_match_start = lower_pos + match_start_in_slice;
-            let lower_match_end = lower_match_start + query_lower.len();
-
-            let orig_match_start = lower_to_orig[lower_match_start];
-            let orig_match_end = lower_to_orig[lower_match_end];
-
-            if orig_match_start > orig_pos {
-                spans.push(Span::styled(
-                    text[orig_pos..orig_match_start].to_string(),
-                    base_style,
-                ));
-            }
-            spans.push(Span::styled(
-                text[orig_match_start..orig_match_end].to_string(),
-                highlight_style,
-            ));
-            orig_pos = orig_match_end;
-            lower_pos = lower_match_end;
-        } else {
-            spans.push(Span::styled(text[orig_pos..].to_string(), base_style));
-            orig_pos = text.len();
-            break;
+    let mut pos = 0;
+    for (start, end) in ranges {
+        if start > pos {
+            spans.push(Span::styled(text[pos..start].to_string(), base_style));
         }
+        spans.push(Span::styled(text[start..end].to_string(), highlight_style));
+        pos = end;
     }
-
-    if orig_pos < text.len() {
-        spans.push(Span::styled(text[orig_pos..].to_string(), base_style));
+    if pos < text.len() {
+        spans.push(Span::styled(text[pos..].to_string(), base_style));
     }
-
     spans
 }
 
@@ -1998,6 +2024,7 @@ mod tests {
             pid: None,
             identifier: None,
             message: "msg".to_string(),
+            message_styles: Vec::new(),
             boot_id: boot_id.map(str::to_string),
             invocation_id: invocation_id.map(str::to_string),
             cursor: None,

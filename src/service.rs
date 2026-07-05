@@ -1,5 +1,5 @@
 use chrono::TimeZone;
-use ratatui::style::Color;
+use ratatui::style::{Color, Modifier, Style};
 
 /// Muted foreground color for inactive/dimmed states (visible on DarkGray highlight)
 pub const COLOR_MUTED: Color = Color::Rgb(100, 100, 100);
@@ -339,6 +339,10 @@ pub struct LogEntry {
     pub pid: Option<String>,
     pub identifier: Option<String>,
     pub message: String,
+    /// Styles parsed from ANSI SGR escape sequences embedded in the raw
+    /// message, as byte ranges over the cleaned `message`. Empty when the
+    /// message contained no escape sequences.
+    pub message_styles: Vec<(std::ops::Range<usize>, Style)>,
     pub boot_id: Option<String>,
     pub invocation_id: Option<String>,
     pub cursor: Option<String>,
@@ -668,6 +672,160 @@ pub fn fetch_log_entries_after_cursor(
     Ok(entries)
 }
 
+/// Parses ANSI SGR escape sequences out of a log message, returning the
+/// visible text plus the style for each byte range that had one. Non-SGR
+/// escape sequences (cursor movement, OSC titles, ...) are stripped.
+fn parse_ansi_message(raw: &str) -> (String, Vec<(std::ops::Range<usize>, Style)>) {
+    if !raw.contains('\x1b') {
+        return (raw.to_string(), Vec::new());
+    }
+
+    fn push_run(
+        styles: &mut Vec<(std::ops::Range<usize>, Style)>,
+        start: usize,
+        end: usize,
+        style: Style,
+    ) {
+        if end > start && style != Style::default() {
+            styles.push((start..end, style));
+        }
+    }
+
+    let mut clean = String::with_capacity(raw.len());
+    let mut styles = Vec::new();
+    let mut current = Style::default();
+    let mut run_start = 0;
+
+    let mut chars = raw.chars().peekable();
+    while let Some(ch) = chars.next() {
+        if ch != '\x1b' {
+            clean.push(ch);
+            continue;
+        }
+        match chars.peek() {
+            // CSI: ESC [ <params> <final byte in @..~>
+            Some('[') => {
+                chars.next();
+                let mut params = String::new();
+                let mut final_byte = None;
+                for c in chars.by_ref() {
+                    if ('\x40'..='\x7e').contains(&c) {
+                        final_byte = Some(c);
+                        break;
+                    }
+                    params.push(c);
+                }
+                if final_byte == Some('m') {
+                    push_run(&mut styles, run_start, clean.len(), current);
+                    run_start = clean.len();
+                    current = apply_sgr(current, &params);
+                }
+            }
+            // OSC: ESC ] ... terminated by BEL or ESC \
+            Some(']') => {
+                chars.next();
+                while let Some(c) = chars.next() {
+                    if c == '\x07' {
+                        break;
+                    }
+                    if c == '\x1b' && chars.peek() == Some(&'\\') {
+                        chars.next();
+                        break;
+                    }
+                }
+            }
+            // Two-character escape (ESC c, ESC ( B, ...): drop the next char
+            _ => {
+                chars.next();
+            }
+        }
+    }
+    push_run(&mut styles, run_start, clean.len(), current);
+    (clean, styles)
+}
+
+fn apply_sgr(mut style: Style, params: &str) -> Style {
+    // Empty parameters (ESC[m) mean reset, hence the unwrap_or(0).
+    let mut codes = params
+        .split([';', ':'])
+        .map(|p| p.parse::<u16>().unwrap_or(0));
+    while let Some(code) = codes.next() {
+        match code {
+            0 => style = Style::default(),
+            1 => style = style.add_modifier(Modifier::BOLD),
+            2 => style = style.add_modifier(Modifier::DIM),
+            3 => style = style.add_modifier(Modifier::ITALIC),
+            4 => style = style.add_modifier(Modifier::UNDERLINED),
+            5 | 6 => style = style.add_modifier(Modifier::SLOW_BLINK),
+            7 => style = style.add_modifier(Modifier::REVERSED),
+            8 => style = style.add_modifier(Modifier::HIDDEN),
+            9 => style = style.add_modifier(Modifier::CROSSED_OUT),
+            21 | 22 => style = style.remove_modifier(Modifier::BOLD | Modifier::DIM),
+            23 => style = style.remove_modifier(Modifier::ITALIC),
+            24 => style = style.remove_modifier(Modifier::UNDERLINED),
+            25 => style = style.remove_modifier(Modifier::SLOW_BLINK),
+            27 => style = style.remove_modifier(Modifier::REVERSED),
+            28 => style = style.remove_modifier(Modifier::HIDDEN),
+            29 => style = style.remove_modifier(Modifier::CROSSED_OUT),
+            30..=37 => style = style.fg(ansi_standard_color(code - 30)),
+            38 => {
+                if let Some(color) = ansi_extended_color(&mut codes) {
+                    style = style.fg(color);
+                }
+            }
+            39 => style.fg = None,
+            40..=47 => style = style.bg(ansi_standard_color(code - 40)),
+            48 => {
+                if let Some(color) = ansi_extended_color(&mut codes) {
+                    style = style.bg(color);
+                }
+            }
+            49 => style.bg = None,
+            90..=97 => style = style.fg(ansi_bright_color(code - 90)),
+            100..=107 => style = style.bg(ansi_bright_color(code - 100)),
+            _ => {}
+        }
+    }
+    style
+}
+
+fn ansi_standard_color(n: u16) -> Color {
+    match n {
+        0 => Color::Black,
+        1 => Color::Red,
+        2 => Color::Green,
+        3 => Color::Yellow,
+        4 => Color::Blue,
+        5 => Color::Magenta,
+        6 => Color::Cyan,
+        _ => Color::Gray,
+    }
+}
+
+fn ansi_bright_color(n: u16) -> Color {
+    match n {
+        0 => Color::DarkGray,
+        1 => Color::LightRed,
+        2 => Color::LightGreen,
+        3 => Color::LightYellow,
+        4 => Color::LightBlue,
+        5 => Color::LightMagenta,
+        6 => Color::LightCyan,
+        _ => Color::White,
+    }
+}
+
+fn ansi_extended_color(codes: &mut impl Iterator<Item = u16>) -> Option<Color> {
+    match codes.next()? {
+        5 => Some(Color::Indexed(codes.next()? as u8)),
+        2 => {
+            let (r, g, b) = (codes.next()?, codes.next()?, codes.next()?);
+            Some(Color::Rgb(r as u8, g as u8, b as u8))
+        }
+        _ => None,
+    }
+}
+
 fn parse_journal_json_line(line: &str) -> LogEntry {
     let Ok(val) = serde_json::from_str::<serde_json::Value>(line) else {
         return LogEntry {
@@ -676,6 +834,7 @@ fn parse_journal_json_line(line: &str) -> LogEntry {
             pid: None,
             identifier: None,
             message: line.to_string(),
+            message_styles: Vec::new(),
             boot_id: None,
             invocation_id: None,
             cursor: None,
@@ -694,6 +853,7 @@ fn parse_journal_json_line(line: &str) -> LogEntry {
         }
         _ => line.to_string(),
     };
+    let (message, message_styles) = parse_ansi_message(&message);
 
     let priority = val["PRIORITY"]
         .as_str()
@@ -721,6 +881,7 @@ fn parse_journal_json_line(line: &str) -> LogEntry {
         pid,
         identifier,
         message,
+        message_styles,
         boot_id,
         invocation_id,
         cursor,
@@ -1515,6 +1676,104 @@ mod tests {
         let line = r#"{"MESSAGE":[104,101,108,108,111]}"#;
         let entry = parse_journal_json_line(line);
         assert_eq!(entry.message, "hello");
+    }
+
+    // parse_ansi_message
+
+    #[test]
+    fn test_ansi_no_escapes_passthrough() {
+        let (clean, styles) = parse_ansi_message("plain text");
+        assert_eq!(clean, "plain text");
+        assert!(styles.is_empty());
+    }
+
+    #[test]
+    fn test_ansi_tracing_style_line() {
+        // The shape emitted by Rust tracing subscribers (e.g. garage).
+        let raw = "\x1b[2m2026-07-05\x1b[0m \x1b[32m INFO\x1b[0m rest";
+        let (clean, styles) = parse_ansi_message(raw);
+        assert_eq!(clean, "2026-07-05  INFO rest");
+        assert_eq!(styles.len(), 2);
+        assert_eq!(styles[0].0, 0..10);
+        assert_eq!(styles[0].1, Style::default().add_modifier(Modifier::DIM));
+        assert_eq!(styles[1].0, 11..16);
+        assert_eq!(styles[1].1, Style::default().fg(Color::Green));
+        assert_eq!(&clean[styles[1].0.clone()], " INFO");
+    }
+
+    #[test]
+    fn test_ansi_bold_color_combined() {
+        let (clean, styles) = parse_ansi_message("\x1b[1;31mX\x1b[0m");
+        assert_eq!(clean, "X");
+        assert_eq!(
+            styles,
+            vec![(0..1, Style::default().fg(Color::Red).add_modifier(Modifier::BOLD))]
+        );
+    }
+
+    #[test]
+    fn test_ansi_empty_params_resets() {
+        let (clean, styles) = parse_ansi_message("\x1b[31ma\x1b[mb");
+        assert_eq!(clean, "ab");
+        assert_eq!(styles, vec![(0..1, Style::default().fg(Color::Red))]);
+    }
+
+    #[test]
+    fn test_ansi_indexed_and_rgb_colors() {
+        let (_, styles) = parse_ansi_message("\x1b[38;5;196ma\x1b[0m\x1b[38;2;1;2;3mb\x1b[0m");
+        assert_eq!(styles[0].1, Style::default().fg(Color::Indexed(196)));
+        assert_eq!(styles[1].1, Style::default().fg(Color::Rgb(1, 2, 3)));
+    }
+
+    #[test]
+    fn test_ansi_bright_and_background_colors() {
+        let (_, styles) = parse_ansi_message("\x1b[91;44ma\x1b[0m");
+        assert_eq!(
+            styles,
+            vec![(0..1, Style::default().fg(Color::LightRed).bg(Color::Blue))]
+        );
+    }
+
+    #[test]
+    fn test_ansi_non_sgr_csi_stripped() {
+        let (clean, styles) = parse_ansi_message("a\x1b[2Kb\x1b[1;5Hc");
+        assert_eq!(clean, "abc");
+        assert!(styles.is_empty());
+    }
+
+    #[test]
+    fn test_ansi_osc_stripped() {
+        let (clean, styles) =
+            parse_ansi_message("a\x1b]0;window title\x07b\x1b]8;;http://x\x1b\\c");
+        assert_eq!(clean, "abc");
+        assert!(styles.is_empty());
+    }
+
+    #[test]
+    fn test_ansi_malformed_trailing_escape() {
+        assert_eq!(parse_ansi_message("a\x1b").0, "a");
+        assert_eq!(parse_ansi_message("a\x1b[").0, "a");
+        assert_eq!(parse_ansi_message("a\x1b[3").0, "a");
+    }
+
+    #[test]
+    fn test_ansi_multibyte_text_ranges() {
+        let (clean, styles) = parse_ansi_message("\x1b[32m\u{7e7c}\u{7e8c}\x1b[0m ok");
+        assert_eq!(clean, "\u{7e7c}\u{7e8c} ok");
+        assert_eq!(styles, vec![(0..6, Style::default().fg(Color::Green))]);
+    }
+
+    #[test]
+    fn test_parse_byte_array_message_with_ansi() {
+        // journald delivers messages containing control bytes as byte arrays;
+        // this is ESC [ 3 2 m h i ESC [ 0 m
+        let line = r#"{"MESSAGE":[27,91,51,50,109,104,105,27,91,48,109]}"#;
+        let entry = parse_journal_json_line(line);
+        assert_eq!(entry.message, "hi");
+        assert_eq!(
+            entry.message_styles,
+            vec![(0..2, Style::default().fg(Color::Green))]
+        );
     }
 
     #[test]
