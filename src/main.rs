@@ -660,65 +660,53 @@ fn handle_mouse_event(app: &mut App, mouse: MouseEvent, frame_size: Rect) {
     let regions = ui::get_layout_regions(frame_size, app.show_logs);
 
     if app.show_logs {
-        if let Some(logs_panel) = regions.logs_panel {
-            match mouse.kind {
-                MouseEventKind::ScrollUp => {
-                    if mouse_in_rect(mouse, logs_panel) {
-                        app.scroll_logs_up(3);
+        // Every arm below applies only inside the logs panel, so gate once here.
+        let Some(logs_panel) = regions.logs_panel else {
+            return;
+        };
+        if !mouse_in_rect(mouse, logs_panel) {
+            return;
+        }
+        match mouse.kind {
+            MouseEventKind::ScrollUp => app.scroll_logs_up(3),
+            MouseEventKind::ScrollDown => app.scroll_logs_down(3),
+            MouseEventKind::Down(MouseButton::Left) => {
+                // +1 for the border top row
+                let y_in_panel = mouse.row.saturating_sub(logs_panel.y + 1) as usize;
+                if let Some(entry_idx) = ui::log_entry_at_y(app, y_in_panel) {
+                    if app.log_selected_entry == Some(entry_idx) && app.system_logs_mode {
+                        // Re-click on selected entry → navigate
+                        app.navigate_to_log_unit();
+                    } else {
+                        // First click → pause and highlight
+                        app.log_paused = true;
+                        app.log_selected_entry = Some(entry_idx);
                     }
                 }
-                MouseEventKind::ScrollDown => {
-                    if mouse_in_rect(mouse, logs_panel) {
-                        app.scroll_logs_down(3);
-                    }
-                }
-                MouseEventKind::Down(MouseButton::Left) => {
-                    if mouse_in_rect(mouse, logs_panel) {
-                        // +1 for the border top row
-                        let y_in_panel = mouse.row.saturating_sub(logs_panel.y + 1) as usize;
-                        if let Some(entry_idx) = ui::log_entry_at_y(app, y_in_panel) {
-                            if app.log_selected_entry == Some(entry_idx) && app.system_logs_mode {
-                                // Re-click on selected entry → navigate
-                                app.navigate_to_log_unit();
-                            } else {
-                                // First click → pause and highlight
-                                app.log_paused = true;
-                                app.log_selected_entry = Some(entry_idx);
-                            }
-                        }
-                    }
-                }
-                _ => {}
             }
+            _ => {}
         }
     } else {
-        // Service mode: existing behavior
+        // Service mode: existing behavior, likewise scoped to the service list.
+        if !mouse_in_rect(mouse, regions.services_list) {
+            return;
+        }
         match mouse.kind {
             MouseEventKind::Down(MouseButton::Left) => {
-                if mouse_in_rect(mouse, regions.services_list) {
-                    app.clear_status_message();
-                    let y_in_list = mouse.row.saturating_sub(regions.services_list.y + 1);
-                    let clicked_index = app.list_state.offset() + y_in_list as usize;
-                    if clicked_index < app.filtered_indices.len() {
-                        if app.list_state.selected() == Some(clicked_index) {
-                            // Re-click on selected entry → open details
-                            app.open_details();
-                        } else {
-                            app.list_state.select(Some(clicked_index));
-                        }
+                app.clear_status_message();
+                let y_in_list = mouse.row.saturating_sub(regions.services_list.y + 1);
+                let clicked_index = app.list_state.offset() + y_in_list as usize;
+                if clicked_index < app.filtered_indices.len() {
+                    if app.list_state.selected() == Some(clicked_index) {
+                        // Re-click on selected entry → open details
+                        app.open_details();
+                    } else {
+                        app.list_state.select(Some(clicked_index));
                     }
                 }
             }
-            MouseEventKind::ScrollUp => {
-                if mouse_in_rect(mouse, regions.services_list) {
-                    app.previous();
-                }
-            }
-            MouseEventKind::ScrollDown => {
-                if mouse_in_rect(mouse, regions.services_list) {
-                    app.next();
-                }
-            }
+            MouseEventKind::ScrollUp => app.previous(),
+            MouseEventKind::ScrollDown => app.next(),
             _ => {}
         }
     }
