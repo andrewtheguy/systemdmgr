@@ -1,5 +1,6 @@
 mod app;
 mod service;
+mod startup;
 mod ui;
 
 use std::io::{self, stdout};
@@ -19,12 +20,52 @@ use std::sync::Arc;
 
 use app::App;
 use service::{validate_systemctl_version, CommandRunner, LocalRunner, SshRunner};
+use startup::Connection;
 
 const LIVE_TAIL_REFRESH_INTERVAL: Duration = Duration::from_millis(500);
 
+/// Opens the connection and confirms systemd is usable on the other end.
+/// The error is a ready-to-show message: printed on stderr when the
+/// connection came from a CLI flag, or shown in the startup menu.
+fn connect(connection: Connection) -> Result<(Arc<dyn CommandRunner>, Option<String>), String> {
+    let (runner, host_label): (Arc<dyn CommandRunner>, Option<String>) = match connection {
+        Connection::Local => (Arc::new(LocalRunner), None),
+        Connection::Ssh(ssh_args) => {
+            let label = service::ssh_destination(&ssh_args).unwrap_or_else(|| ssh_args.join(" "));
+            eprintln!("Connecting to {label}...");
+            let runner = SshRunner::connect(ssh_args)
+                .map_err(|e| format!("SSH connection failed: {e}"))?;
+            (Arc::new(runner), Some(label))
+        }
+    };
+
+    match validate_systemctl_version(runner.as_ref()) {
+        Ok(version) => {
+            if host_label.is_some() {
+                eprintln!("Connected. Remote systemd {version}.");
+            }
+            Ok((runner, host_label))
+        }
+        Err(e) => Err(match host_label.as_deref() {
+            Some(host) => format!(
+                "Error: systemctl is not available on remote host '{host}'.\n\
+                 Ensure the remote host is running Linux with systemd installed.\n\
+                 Detail: {e}"
+            ),
+            None => format!(
+                "Error: systemctl is not available on this machine.\n\
+                 systemdmgr requires Linux with systemd. It cannot run natively on macOS or other non-systemd systems.\n\
+                 To manage services on a remote Linux host, pick SSH in the menu or run: systemdmgr --ssh <destination>\n\
+                 Detail: {e}"
+            ),
+        }),
+    }
+}
+
 fn main() -> io::Result<()> {
     let args: Vec<String> = std::env::args().collect();
-    let mut ssh_args: Option<Vec<String>> = None;
+    // No connection flag means the user is asked in the startup menu instead.
+    let mut cli_connection: Option<Connection> = None;
     let mut i = 1;
     while i < args.len() {
         match args[i].as_str() {
@@ -32,6 +73,7 @@ fn main() -> io::Result<()> {
                 println!("systemdmgr {}", env!("CARGO_PKG_VERSION"));
                 return Ok(());
             }
+            "--local" => cli_connection = Some(Connection::Local),
             // Everything after --ssh is forwarded to the ssh client verbatim,
             // using ssh's own `[options] destination` syntax.
             "--ssh" => {
@@ -40,52 +82,38 @@ fn main() -> io::Result<()> {
                     eprintln!("--ssh requires ssh arguments (e.g., --ssh user@server or --ssh -p 2222 -i key user@server)");
                     std::process::exit(1);
                 }
-                ssh_args = Some(rest.to_vec());
+                cli_connection = Some(Connection::Ssh(rest.to_vec()));
                 i = args.len();
             }
             arg => {
                 eprintln!("Unknown argument: {arg}");
-                eprintln!("Usage: systemdmgr [version] [--ssh [ssh-options] destination]");
+                eprintln!("Usage: systemdmgr [version] [--local | --ssh [ssh-options] destination]");
                 std::process::exit(1);
             }
         }
         i += 1;
     }
 
-    let (runner, host_label): (Arc<dyn CommandRunner>, Option<String>) = if let Some(ssh_args) = ssh_args {
-        let label =
-            service::ssh_destination(&ssh_args).unwrap_or_else(|| ssh_args.join(" "));
-        eprintln!("Connecting to {label}...");
-        match SshRunner::connect(ssh_args) {
-            Ok(r) => (Arc::new(r), Some(label)),
-            Err(e) => {
-                eprintln!("SSH connection failed: {e}");
-                std::process::exit(1);
-            }
-        }
-    } else {
-        (Arc::new(LocalRunner), None)
-    };
-
-    match validate_systemctl_version(runner.as_ref()) {
-        Ok(version) => {
-            if host_label.is_some() {
-                eprintln!("Connected. Remote systemd {version}.");
-            }
-        }
-        Err(e) => {
-            if let Some(host) = host_label.as_deref() {
-                eprintln!("Error: systemctl is not available on remote host '{host}'.");
-                eprintln!("Ensure the remote host is running Linux with systemd installed.");
-                eprintln!("Detail: {e}");
-            } else {
-                eprintln!("Error: systemctl is not available on this machine.");
-                eprintln!("systemdmgr requires Linux with systemd. It cannot run natively on macOS or other non-systemd systems.");
-                eprintln!("To manage services on a remote Linux host, use: systemdmgr --ssh <destination>");
-            }
+    let (runner, host_label) = match cli_connection {
+        Some(connection) => connect(connection).unwrap_or_else(|e| {
+            eprintln!("{e}");
             std::process::exit(1);
+        }),
+        // A failed attempt returns to the menu with the reason on screen, so a
+        // mistyped host or an unreachable server can be corrected in place.
+        None => {
+            let mut error = None;
+            loop {
+                let Some(connection) = startup::choose_connection(error.take())? else {
+                    return Ok(());
+                };
+                match connect(connection) {
+                    Ok(connected) => break connected,
+                    Err(e) => error = Some(e),
+                }
+            }
         }
-    }
+    };
 
     // Setup terminal with mouse capture
     enable_raw_mode()?;
