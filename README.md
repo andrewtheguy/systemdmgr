@@ -50,12 +50,6 @@ The binary is installed to `/usr/local/bin`. Then connect to a remote host:
 systemdmgr --ssh user@server
 ```
 
-### From Source
-
-```bash
-cargo install --path .
-```
-
 ## Usage
 
 ```bash
