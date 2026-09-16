@@ -574,7 +574,8 @@ fn main() -> io::Result<()> {
                         if app.error.is_none() {
                             let ts = app
                                 .last_refreshed
-                                .map(|t| format!(" refreshed at {}", t.format("%b %d %H:%M:%S %Z")))
+                                .as_ref()
+                                .map(|t| format!(" refreshed at {}", t.strftime("%b %d %H:%M:%S %Z")))
                                 .unwrap_or_default();
                             app.status_message = Some(format!("SystemD Services{ts}"));
                         }

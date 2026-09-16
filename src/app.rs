@@ -85,7 +85,7 @@ pub struct App {
     pub log_paused: bool,
     pub log_selected_entry: Option<usize>,
     pub logs_at_bottom: bool,
-    pub last_refreshed: Option<chrono::DateTime<chrono::Local>>,
+    pub last_refreshed: Option<jiff::Zoned>,
     // Unit file viewer
     pub show_unit_file: bool,
     pub unit_file_content: Vec<String>,
@@ -195,7 +195,7 @@ impl App {
             Ok(services) => {
                 self.services = services;
                 self.error = None;
-                self.last_refreshed = Some(chrono::Local::now());
+                self.last_refreshed = Some(jiff::Zoned::now());
                 self.update_filter();
                 if !self.filtered_indices.is_empty() && self.list_state.selected().is_none() {
                     self.list_state.select(Some(0));
@@ -1090,7 +1090,7 @@ impl App {
                     Ok(units) => {
                         self.properties_cache.clear();
                         self.services = units;
-                        self.last_refreshed = Some(chrono::Local::now());
+                        self.last_refreshed = Some(jiff::Zoned::now());
                         self.update_filter();
                     }
                     Err(mpsc::TryRecvError::Empty) => break,

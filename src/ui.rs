@@ -261,7 +261,8 @@ pub fn render(frame: &mut Frame, app: &mut App, live_indicator_on: bool) {
         let title = format!("SystemD {} [{}]{host_suffix} (user:{username})", app.unit_type.label(), scope_label);
         let refreshed = app
             .last_refreshed
-            .map(|t| format!("  (loaded {})", t.format("%b %d %H:%M:%S %Z")))
+            .as_ref()
+            .map(|t| format!("  (loaded {})", t.strftime("%b %d %H:%M:%S %Z")))
             .unwrap_or_default();
         Paragraph::new(format!("{}{}", title, refreshed))
             .style(Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD))
