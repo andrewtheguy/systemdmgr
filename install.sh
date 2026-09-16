@@ -274,17 +274,11 @@ download_and_install() {
     local temp_dir
     temp_dir=$(mktemp -d)
     local temp_binary="${temp_dir}/${BINARY_NAME}"
-    local install_dir
+    local install_dir="/usr/local/bin"
     local needs_sudo=false
 
-    if [ "$OS" = "macos" ]; then
-        install_dir="${HOME}/.local/bin"
-        mkdir -p "$install_dir"
-    else
-        install_dir="/usr/local/bin"
-        if [ "$(id -u)" -ne 0 ]; then
-            needs_sudo=true
-        fi
+    if [ "$(id -u)" -ne 0 ]; then
+        needs_sudo=true
     fi
 
     local final_path="${install_dir}/systemdmgr"
@@ -295,12 +289,12 @@ download_and_install() {
     chmod +x "$temp_binary"
 
     if [ "$needs_sudo" = true ]; then
-        if ! sudo mv "$temp_binary" "$final_path"; then
+        if ! sudo mkdir -p "$install_dir" || ! sudo mv "$temp_binary" "$final_path"; then
             print_error "Failed to install binary to ${final_path}"
             exit 1
         fi
     else
-        if ! mv "$temp_binary" "$final_path"; then
+        if ! mkdir -p "$install_dir" || ! mv "$temp_binary" "$final_path"; then
             print_error "Failed to install binary to ${final_path}"
             exit 1
         fi
@@ -310,12 +304,10 @@ download_and_install() {
 
     print_info "Binary installed successfully to ${final_path}"
 
-    if [ "$OS" = "macos" ]; then
-        case ":$PATH:" in
-            *":${install_dir}:"*) ;;
-            *) print_warn "Make sure ${install_dir} is in your PATH" ;;
-        esac
-    fi
+    case ":$PATH:" in
+        *":${install_dir}:"*) ;;
+        *) print_warn "Make sure ${install_dir} is in your PATH" ;;
+    esac
 }
 
 # Display usage information
@@ -340,9 +332,8 @@ show_usage() {
     echo ""
     echo "Supported platforms: Linux (amd64, arm64), macOS (amd64, arm64)"
     echo ""
-    echo "Install locations:"
-    echo "  Linux:  /usr/local/bin (requires sudo)"
-    echo "  macOS:  ~/.local/bin (no sudo required)"
+    echo "Install location:"
+    echo "  /usr/local/bin (requires sudo unless running as root)"
 }
 
 # Main installation function
@@ -385,9 +376,9 @@ install() {
     fi
 }
 
-# Check if sudo is available for installation (Linux only)
+# Check if sudo is available for installation
 check_privileges() {
-    if [ "$OS" = "linux" ] && [ "$(id -u)" -ne 0 ]; then
+    if [ "$(id -u)" -ne 0 ]; then
         if ! command -v sudo >/dev/null 2>&1; then
             print_error "sudo is required to install to /usr/local/bin. Please install sudo or run as root."
             exit 1
