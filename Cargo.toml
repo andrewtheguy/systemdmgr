@@ -1,6 +1,6 @@
 [package]
 name = "systemdmgr"
-version = "0.0.12"
+version = "0.0.13"
 edition = "2024"
 
 [dependencies]
@@ -8,5 +8,5 @@ ratatui = "0.30"
 crossterm = "0.29"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
-chrono = "0.4"
+jiff = { version = "0.2", default-features = false, features = ["std", "tz-system"] }
 unicode-width = "0.2"

@@ -1,5 +1,6 @@
 mod app;
 mod service;
+mod startup;
 mod ui;
 
 use std::io::{self, stdout};
@@ -19,12 +20,52 @@ use std::sync::Arc;
 
 use app::App;
 use service::{validate_systemctl_version, CommandRunner, LocalRunner, SshRunner};
+use startup::Connection;
 
 const LIVE_TAIL_REFRESH_INTERVAL: Duration = Duration::from_millis(500);
 
+/// Opens the connection and confirms systemd is usable on the other end.
+/// The error is a ready-to-show message: printed on stderr when the
+/// connection came from a CLI flag, or shown in the startup menu.
+fn connect(connection: Connection) -> Result<(Arc<dyn CommandRunner>, Option<String>), String> {
+    let (runner, host_label): (Arc<dyn CommandRunner>, Option<String>) = match connection {
+        Connection::Local => (Arc::new(LocalRunner), None),
+        Connection::Ssh(ssh_args) => {
+            let label = service::ssh_destination(&ssh_args).unwrap_or_else(|| ssh_args.join(" "));
+            eprintln!("Connecting to {label}...");
+            let runner = SshRunner::connect(ssh_args)
+                .map_err(|e| format!("SSH connection failed: {e}"))?;
+            (Arc::new(runner), Some(label))
+        }
+    };
+
+    match validate_systemctl_version(runner.as_ref()) {
+        Ok(version) => {
+            if host_label.is_some() {
+                eprintln!("Connected. Remote systemd {version}.");
+            }
+            Ok((runner, host_label))
+        }
+        Err(e) => Err(match host_label.as_deref() {
+            Some(host) => format!(
+                "Error: systemctl is not available on remote host '{host}'.\n\
+                 Ensure the remote host is running Linux with systemd installed.\n\
+                 Detail: {e}"
+            ),
+            None => format!(
+                "Error: systemctl is not available on this machine.\n\
+                 systemdmgr requires Linux with systemd. It cannot run natively on macOS or other non-systemd systems.\n\
+                 To manage services on a remote Linux host, pick SSH in the menu or run: systemdmgr --ssh <destination>\n\
+                 Detail: {e}"
+            ),
+        }),
+    }
+}
+
 fn main() -> io::Result<()> {
     let args: Vec<String> = std::env::args().collect();
-    let mut ssh_args: Option<Vec<String>> = None;
+    // No connection flag means the user is asked in the startup menu instead.
+    let mut cli_connection: Option<Connection> = None;
     let mut i = 1;
     while i < args.len() {
         match args[i].as_str() {
@@ -32,6 +73,7 @@ fn main() -> io::Result<()> {
                 println!("systemdmgr {}", env!("CARGO_PKG_VERSION"));
                 return Ok(());
             }
+            "--local" => cli_connection = Some(Connection::Local),
             // Everything after --ssh is forwarded to the ssh client verbatim,
             // using ssh's own `[options] destination` syntax.
             "--ssh" => {
@@ -40,52 +82,38 @@ fn main() -> io::Result<()> {
                     eprintln!("--ssh requires ssh arguments (e.g., --ssh user@server or --ssh -p 2222 -i key user@server)");
                     std::process::exit(1);
                 }
-                ssh_args = Some(rest.to_vec());
+                cli_connection = Some(Connection::Ssh(rest.to_vec()));
                 i = args.len();
             }
             arg => {
                 eprintln!("Unknown argument: {arg}");
-                eprintln!("Usage: systemdmgr [version] [--ssh [ssh-options] destination]");
+                eprintln!("Usage: systemdmgr [version] [--local | --ssh [ssh-options] destination]");
                 std::process::exit(1);
             }
         }
         i += 1;
     }
 
-    let (runner, host_label): (Arc<dyn CommandRunner>, Option<String>) = if let Some(ssh_args) = ssh_args {
-        let label =
-            service::ssh_destination(&ssh_args).unwrap_or_else(|| ssh_args.join(" "));
-        eprintln!("Connecting to {label}...");
-        match SshRunner::connect(ssh_args) {
-            Ok(r) => (Arc::new(r), Some(label)),
-            Err(e) => {
-                eprintln!("SSH connection failed: {e}");
-                std::process::exit(1);
-            }
-        }
-    } else {
-        (Arc::new(LocalRunner), None)
-    };
-
-    match validate_systemctl_version(runner.as_ref()) {
-        Ok(version) => {
-            if host_label.is_some() {
-                eprintln!("Connected. Remote systemd {version}.");
-            }
-        }
-        Err(e) => {
-            if let Some(host) = host_label.as_deref() {
-                eprintln!("Error: systemctl is not available on remote host '{host}'.");
-                eprintln!("Ensure the remote host is running Linux with systemd installed.");
-                eprintln!("Detail: {e}");
-            } else {
-                eprintln!("Error: systemctl is not available on this machine.");
-                eprintln!("systemdmgr requires Linux with systemd. It cannot run natively on macOS or other non-systemd systems.");
-                eprintln!("To manage services on a remote Linux host, use: systemdmgr --ssh <destination>");
-            }
+    let (runner, host_label) = match cli_connection {
+        Some(connection) => connect(connection).unwrap_or_else(|e| {
+            eprintln!("{e}");
             std::process::exit(1);
+        }),
+        // A failed attempt returns to the menu with the reason on screen, so a
+        // mistyped host or an unreachable server can be corrected in place.
+        None => {
+            let mut error = None;
+            loop {
+                let Some(connection) = startup::choose_connection(error.take())? else {
+                    return Ok(());
+                };
+                match connect(connection) {
+                    Ok(connected) => break connected,
+                    Err(e) => error = Some(e),
+                }
+            }
         }
-    }
+    };
 
     // Setup terminal with mouse capture
     enable_raw_mode()?;
@@ -546,7 +574,8 @@ fn main() -> io::Result<()> {
                         if app.error.is_none() {
                             let ts = app
                                 .last_refreshed
-                                .map(|t| format!(" refreshed at {}", t.format("%b %d %H:%M:%S %Z")))
+                                .as_ref()
+                                .map(|t| format!(" refreshed at {}", t.strftime("%b %d %H:%M:%S %Z")))
                                 .unwrap_or_default();
                             app.status_message = Some(format!("SystemD Services{ts}"));
                         }
@@ -631,65 +660,53 @@ fn handle_mouse_event(app: &mut App, mouse: MouseEvent, frame_size: Rect) {
     let regions = ui::get_layout_regions(frame_size, app.show_logs);
 
     if app.show_logs {
-        if let Some(logs_panel) = regions.logs_panel {
-            match mouse.kind {
-                MouseEventKind::ScrollUp => {
-                    if mouse_in_rect(mouse, logs_panel) {
-                        app.scroll_logs_up(3);
+        // Every arm below applies only inside the logs panel, so gate once here.
+        let Some(logs_panel) = regions.logs_panel else {
+            return;
+        };
+        if !mouse_in_rect(mouse, logs_panel) {
+            return;
+        }
+        match mouse.kind {
+            MouseEventKind::ScrollUp => app.scroll_logs_up(3),
+            MouseEventKind::ScrollDown => app.scroll_logs_down(3),
+            MouseEventKind::Down(MouseButton::Left) => {
+                // +1 for the border top row
+                let y_in_panel = mouse.row.saturating_sub(logs_panel.y + 1) as usize;
+                if let Some(entry_idx) = ui::log_entry_at_y(app, y_in_panel) {
+                    if app.log_selected_entry == Some(entry_idx) && app.system_logs_mode {
+                        // Re-click on selected entry → navigate
+                        app.navigate_to_log_unit();
+                    } else {
+                        // First click → pause and highlight
+                        app.log_paused = true;
+                        app.log_selected_entry = Some(entry_idx);
                     }
                 }
-                MouseEventKind::ScrollDown => {
-                    if mouse_in_rect(mouse, logs_panel) {
-                        app.scroll_logs_down(3);
-                    }
-                }
-                MouseEventKind::Down(MouseButton::Left) => {
-                    if mouse_in_rect(mouse, logs_panel) {
-                        // +1 for the border top row
-                        let y_in_panel = mouse.row.saturating_sub(logs_panel.y + 1) as usize;
-                        if let Some(entry_idx) = ui::log_entry_at_y(app, y_in_panel) {
-                            if app.log_selected_entry == Some(entry_idx) && app.system_logs_mode {
-                                // Re-click on selected entry → navigate
-                                app.navigate_to_log_unit();
-                            } else {
-                                // First click → pause and highlight
-                                app.log_paused = true;
-                                app.log_selected_entry = Some(entry_idx);
-                            }
-                        }
-                    }
-                }
-                _ => {}
             }
+            _ => {}
         }
     } else {
-        // Service mode: existing behavior
+        // Service mode: existing behavior, likewise scoped to the service list.
+        if !mouse_in_rect(mouse, regions.services_list) {
+            return;
+        }
         match mouse.kind {
             MouseEventKind::Down(MouseButton::Left) => {
-                if mouse_in_rect(mouse, regions.services_list) {
-                    app.clear_status_message();
-                    let y_in_list = mouse.row.saturating_sub(regions.services_list.y + 1);
-                    let clicked_index = app.list_state.offset() + y_in_list as usize;
-                    if clicked_index < app.filtered_indices.len() {
-                        if app.list_state.selected() == Some(clicked_index) {
-                            // Re-click on selected entry → open details
-                            app.open_details();
-                        } else {
-                            app.list_state.select(Some(clicked_index));
-                        }
+                app.clear_status_message();
+                let y_in_list = mouse.row.saturating_sub(regions.services_list.y + 1);
+                let clicked_index = app.list_state.offset() + y_in_list as usize;
+                if clicked_index < app.filtered_indices.len() {
+                    if app.list_state.selected() == Some(clicked_index) {
+                        // Re-click on selected entry → open details
+                        app.open_details();
+                    } else {
+                        app.list_state.select(Some(clicked_index));
                     }
                 }
             }
-            MouseEventKind::ScrollUp => {
-                if mouse_in_rect(mouse, regions.services_list) {
-                    app.previous();
-                }
-            }
-            MouseEventKind::ScrollDown => {
-                if mouse_in_rect(mouse, regions.services_list) {
-                    app.next();
-                }
-            }
+            MouseEventKind::ScrollUp => app.previous(),
+            MouseEventKind::ScrollDown => app.next(),
             _ => {}
         }
     }

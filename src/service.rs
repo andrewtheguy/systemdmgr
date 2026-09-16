@@ -1,4 +1,4 @@
-use chrono::TimeZone;
+use jiff::{tz::TimeZone, Timestamp};
 use ratatui::style::{Color, Modifier, Style};
 
 /// Muted foreground color for inactive/dimmed states (visible on DarkGray highlight)
@@ -955,11 +955,12 @@ fn parse_journal_json_line(line: &str) -> LogEntry {
 }
 
 pub fn format_log_timestamp(timestamp_us: i64) -> String {
-    let secs = timestamp_us / 1_000_000;
-    let nsecs = ((timestamp_us % 1_000_000) * 1000) as u32;
-    match chrono::Local.timestamp_opt(secs, nsecs) {
-        chrono::LocalResult::Single(dt) => dt.format("%b %d %H:%M:%S").to_string(),
-        _ => String::new(),
+    match Timestamp::from_microsecond(timestamp_us) {
+        Ok(ts) => ts
+            .to_zoned(TimeZone::system())
+            .strftime("%b %d %H:%M:%S")
+            .to_string(),
+        Err(_) => String::new(),
     }
 }
 

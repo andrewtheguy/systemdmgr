@@ -56,6 +56,24 @@ systemdmgr --ssh user@server
 systemdmgr
 ```
 
+Started without a connection flag, systemdmgr opens a menu asking where to manage services:
+
+```
+Where do you want to manage services?
+
+> Local  this machine
+  SSH    a remote host over ssh
+```
+
+Picking **SSH** lists the `Host` aliases from your `~/.ssh/config` and lets you type any other destination (with ssh options, if needed). `↑`/`↓` selects, `Enter` confirms, `Esc` goes back, `q` quits. If the connection fails, you land back in the menu with the reason on screen.
+
+Skip the menu with a connection flag:
+
+```bash
+systemdmgr --local
+systemdmgr --ssh user@server
+```
+
 ### Remote Management
 
 Manage systemd units on a remote server over SSH:

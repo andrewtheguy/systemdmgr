@@ -15,7 +15,8 @@ systemdmgr is a terminal UI (TUI) for browsing, inspecting, and managing systemd
 
 ```
 src/
-  main.rs      — entry point, terminal setup, event loop, mouse handling
+  main.rs      — entry point, CLI parsing, connection setup, event loop, mouse handling
+  startup.rs   — startup connection menu (local vs. SSH, ~/.ssh/config host list)
   app.rs       — application state (App struct), navigation, filtering, picker logic
   service.rs   — data types (SystemdUnit, LogEntry, UnitProperties), CLI fetching, parsing
   ui.rs        — rendering (layout, widgets, modals, color helpers)
@@ -26,6 +27,7 @@ src/
 ### Remote Management (SSH)
 
 - Enabled via the `--ssh` CLI flag; everything after it is forwarded to ssh in the single accepted form `--ssh [ssh-options] destination` (options first, destination last; no `--`, no trailing arguments)
+- Without a connection flag, a startup menu asks for local vs. SSH; the SSH step offers `Host` aliases from `~/.ssh/config` and accepts a typed destination, producing the same arguments as `--ssh`. `--local` skips the menu
 - Delegates connectivity to the system OpenSSH client (`ssh` on `PATH`) — no bundled SSH library
 - An interactive ControlMaster connection is opened on startup; each command runs as an `ssh` subprocess multiplexed over the master socket (`BatchMode=yes`)
 - Full `~/.ssh/config` semantics, authentication methods (agent, passphrase-protected keys, password, OTP/MFA), host key handling, and jump hosts — all handled by ssh itself

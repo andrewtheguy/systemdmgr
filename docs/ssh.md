@@ -8,6 +8,8 @@ systemdmgr can manage systemd units on a remote server over SSH.
 systemdmgr --ssh user@server
 ```
 
+Or start systemdmgr with no arguments and pick **SSH** in the startup menu, which lists the `Host` aliases from `~/.ssh/config` and accepts any other destination typed in full. The menu passes what you pick to the ssh client exactly as `--ssh` does.
+
 The connection authenticates and enters the TUI. All `systemctl` and `journalctl` commands run transparently over SSH.
 The remote host must have systemd 246+ and `systemctl` on `PATH`; this is validated with `systemctl --version` after authentication.
 
