@@ -217,14 +217,26 @@ pub fn choose_connection(error: Option<String>) -> io::Result<Option<Connection>
     let mut menu = Menu::new(load_ssh_config_hosts(), error);
 
     enable_raw_mode()?;
-    execute!(stdout(), EnterAlternateScreen)?;
-    let mut terminal = Terminal::new(CrosstermBackend::new(stdout()))?;
+    // Once raw mode is on, the terminal must be put back even if the rest of
+    // the setup fails — otherwise the shell is left unusable.
+    let mut terminal = match execute!(stdout(), EnterAlternateScreen)
+        .and_then(|()| Terminal::new(CrosstermBackend::new(stdout())))
+    {
+        Ok(terminal) => terminal,
+        Err(e) => {
+            // Leaving the alternate screen is harmless if it was never entered.
+            let _ = execute!(stdout(), LeaveAlternateScreen);
+            let _ = disable_raw_mode();
+            return Err(e);
+        }
+    };
 
     let result = run_menu(&mut terminal, &mut menu);
 
-    disable_raw_mode()?;
-    execute!(terminal.backend_mut(), LeaveAlternateScreen)?;
-    terminal.show_cursor()?;
+    // Every restore step runs even if an earlier one fails.
+    disable_raw_mode()
+        .and(execute!(terminal.backend_mut(), LeaveAlternateScreen))
+        .and(terminal.show_cursor())?;
 
     result
 }
@@ -264,7 +276,14 @@ fn run_menu(
             KeyCode::Char('q') if menu.step == Step::Choice => return Ok(None),
             KeyCode::Char('j') if menu.step == Step::Choice => menu.next(),
             KeyCode::Char('k') if menu.step == Step::Choice => menu.previous(),
-            KeyCode::Char(c) if menu.step == Step::Ssh => menu.type_char(c),
+            // Only plain (or shifted) characters are text; Ctrl/Alt chords are
+            // not input and must not land in the destination.
+            KeyCode::Char(c)
+                if menu.step == Step::Ssh
+                    && key.modifiers.difference(KeyModifiers::SHIFT).is_empty() =>
+            {
+                menu.type_char(c)
+            }
             _ => {}
         }
     }
