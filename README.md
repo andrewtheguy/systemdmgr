@@ -25,35 +25,29 @@ A terminal UI for managing and browsing systemd units.
 ### Quick Install (Linux)
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/andrewtheguy/systemdmgr/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/andrewtheguy/systemdmgr/main/install.sh | sudo bash
 ```
 
 To install a prerelease version:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/andrewtheguy/systemdmgr/main/install.sh | bash -s -- --prerelease
+curl -fsSL https://raw.githubusercontent.com/andrewtheguy/systemdmgr/main/install.sh | sudo bash -s -- --prerelease
 ```
 
-On Linux the installer uses sudo to place the binary in `/usr/local/bin`.
+The installer places the binary in `/usr/local/bin`, which requires root.
 
 ### macOS (SSH remote management only)
 
 macOS does not have systemd, but you can use systemdmgr as an SSH client to manage remote Linux servers:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/andrewtheguy/systemdmgr/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/andrewtheguy/systemdmgr/main/install.sh | sudo bash
 ```
 
-The binary is installed to `~/.local/bin` (no sudo required). Then connect to a remote host:
+The binary is installed to `/usr/local/bin`. Then connect to a remote host:
 
 ```bash
 systemdmgr --ssh user@server
-```
-
-### From Source
-
-```bash
-cargo install --path .
 ```
 
 ## Usage
